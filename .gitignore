@@ -1,0 +1,55 @@
+# Keil MDK
+*.uvguix.*
+*.uvoptx
+*.uvprojx
+*.uvopt
+*.uvproj
+*.uvgui.*
+*.scvd
+*.crf
+*.d
+*.o
+*.obj
+*.htm
+*.lnp
+*.lst
+*.map
+*.m51
+*.plg
+*.iex
+*.axf
+*.elf
+*.out
+*.build_log.htm
+*.dep
+*.bak
+JLinkLog.txt
+JLinkSettings.ini
+
+# Build output
+Build/
+Output/
+Listings/
+Objects/
+DebugConfig/
+RTE/
+*.hex
+*.bin
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Claude
+.claude/
+
+# MXproject (STM32CubeMX temp)
+*.mxproject
