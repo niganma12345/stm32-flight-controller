@@ -17,6 +17,7 @@ typedef enum
     IDLE,         // 已解锁，空闲待命
     NORMAL,       // 正常飞行模式
     FIX_HEIGHT,   // 定高飞行模式
+    MANUAL,       // 手动飞行模式（角度自稳，不使用光流）
     FAIL,         // 故障模式
 } Flight_State;
 

@@ -58,7 +58,7 @@ extern void xPortSysTickHandler(void);
 /* External variables --------------------------------------------------------*/
 extern DMA_HandleTypeDef hdma_adc1;
 /* USER CODE BEGIN EV */
-
+extern UART_HandleTypeDef huart2;
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -154,14 +154,17 @@ void DebugMon_Handler(void)
 
 /**
   * @brief This function handles System tick timer.
-  * @note  FreeRTOS port.c 已接管 SysTick，此处注释避免重复定义
   */
-/*
-void SysTick_Handler(void)
-{
-  HAL_IncTick();
-}
-*/
+//void SysTick_Handler(void)
+//{
+//  /* USER CODE BEGIN SysTick_IRQn 0 */
+
+//  /* USER CODE END SysTick_IRQn 0 */
+//  HAL_IncTick();
+//  /* USER CODE BEGIN SysTick_IRQn 1 */
+
+//  /* USER CODE END SysTick_IRQn 1 */
+//}
 
 /******************************************************************************/
 /* STM32F1xx Peripheral Interrupt Handlers                                    */
@@ -185,5 +188,13 @@ void DMA1_Channel1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+/**
+  * @brief This function handles USART2 global interrupt.
+  */
+void USART2_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart2);
+}
 
 /* USER CODE END 1 */

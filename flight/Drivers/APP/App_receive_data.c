@@ -2,9 +2,10 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
-#include "com_debug.h"
 #include "bmp280.h"
+#include "Com_height.h"
 #include "adc.h"
+#include "App_flight.h"   /* g_flow_data 光流数据 */
 
 extern volatile Remote_Data remote_data;
 extern volatile uint8_t g_shutdown_req;
@@ -81,7 +82,6 @@ uint8_t App_receive_data(void)
     remote_data.shutdown = rx_buff[11];
     remote_data.fix_height = rx_buff[12];
 
-//     debug_printf(":%d,%d,%d,%d,%d,%d\n", remote_data.thr, remote_data.yaw, remote_data.pit, remote_data.rol, remote_data.shutdown, remote_data.fix_height);
     return 0;
 }
 
@@ -92,32 +92,19 @@ uint8_t App_receive_data(void)
  */
 void App_process_connect_state(uint8_t res)
 {
-    static Remote_State last_remote_state = REMOTE_CONNECTED;
-
     if (res == 0)
     {
-        // 接收数据成功一次，即认为连接成功
-        // 此处使用的全局变量，只在当前一个地方会修改LED灯控制，所以无需加锁读取使用
         remote_state = REMOTE_CONNECTED;
         retry_count = 0;
     }
     else if (res == 1)
     {
-        // 接收数据失败，累计次数
         retry_count++;
         if (retry_count >= MAX_RETRY_TIMES)
         {
             remote_state = REMOTE_DISCONNECTED;
             retry_count = 0;
         }
-    }
-
-    // 连接状态变化时打印
-    if (remote_state != last_remote_state)
-    {
-        last_remote_state = remote_state;
-        if (remote_state == REMOTE_CONNECTED)
-            {} /* was: debug_printf("REMOTE CONNECTED\r\n"); */
     }
 }
 
@@ -133,8 +120,6 @@ void App_process_flight_state(void)
     static uint16_t unlock_cnt = 0;
     // 防重复解锁：进入LOCKED后必须先松开解锁位再打回，才能开始计数
     static uint8_t  unlock_ready = 0;  // 0=等待松杆, 1=可以开始解锁
-    // 记录上一次状态，仅在状态变化时打印（初始值≠LOCKED确保首次打印）
-    static Flight_State last_state = FAIL;
 
     switch (flight_state)
     {
@@ -151,27 +136,16 @@ void App_process_flight_state(void)
             // 必须在松杆一次后（unlock_ready=1）才允许计数
             if (unlock_ready)
             {
-                if (unlock_cnt == 0)
-                {
-                    // 首次检测到解锁位，打印当前值
-                    // debug_printf("UNLOCKING... thr=%d yaw=%d (hold 1s)\r\n",
-                    //     remote_data.thr, remote_data.yaw);
-                }
                 if (++unlock_cnt >= (UNLOCK_HOLD_MS / 6))  // 保持约1秒
                 {
                     unlock_cnt = 0;
                     unlock_ready = 0;
                     flight_state = IDLE;
-                    // debug_printf("UNLOCK OK -> IDLE\r\n");
                 }
             }
         }
         else
         {
-            if (unlock_cnt > 0)
-            {
-                // debug_printf("UNLOCK ABORT (stick moved)\r\n");
-            }
             unlock_cnt = 0;   // 摇杆位置不满足则重置计数
             unlock_ready = 1; // 已松杆，下次打到位允许解锁
         }
@@ -192,11 +166,9 @@ void App_process_flight_state(void)
         {
             flight_state = LOCKED;
             remote_data.shutdown = 0;
-            // debug_printf("SHUTDOWN -> LOCKED\r\n");
-            g_shutdown_req = 1;
             break;
         }
-        // 判断是否定高
+        // 定高/定点三态切换：NORMAL → FIX_HEIGHT
         if (remote_data.fix_height == 1)
         {
             flight_state = FIX_HEIGHT;
@@ -206,7 +178,6 @@ void App_process_flight_state(void)
         if (remote_state == REMOTE_DISCONNECTED)
         {
             flight_state = FAIL;
-            // debug_printf("DISCONNECT -> FAIL\r\n");
         }
         break;
 
@@ -218,11 +189,32 @@ void App_process_flight_state(void)
         {
             flight_state = LOCKED;
             remote_data.shutdown = 0;
-            // debug_printf("SHUTDOWN -> LOCKED\r\n");
-            g_shutdown_req = 1;
             break;
         }
-        // 取消定高
+        // 三态循环切换：FIX_HEIGHT → MANUAL
+        if (remote_data.fix_height == 1)
+        {
+            flight_state = MANUAL;
+            remote_data.fix_height = 0;
+        }
+        // 判断故障
+        if (remote_state == REMOTE_DISCONNECTED)
+        {
+            flight_state = FAIL;
+        }
+        break;
+
+    case MANUAL:
+        unlock_cnt = 0;
+        unlock_ready = 0;
+        // shutdown 信号紧急停机
+        if (remote_data.shutdown == 1)
+        {
+            flight_state = LOCKED;
+            remote_data.shutdown = 0;
+            break;
+        }
+        // 三态循环切换：MANUAL → NORMAL（回到自稳）
         if (remote_data.fix_height == 1)
         {
             flight_state = NORMAL;
@@ -232,7 +224,6 @@ void App_process_flight_state(void)
         if (remote_state == REMOTE_DISCONNECTED)
         {
             flight_state = FAIL;
-            // debug_printf("DISCONNECT -> FAIL\r\n");
         }
         break;
 
@@ -247,24 +238,6 @@ void App_process_flight_state(void)
         unlock_ready = 0;
         break;
     }
-
-    // 状态变化时统一打印当前状态
-    if (flight_state != last_state)
-    {
-        last_state = flight_state;
-        switch (flight_state)
-        {
-        case LOCKED:
-            if (remote_state == REMOTE_CONNECTED)
-                {} /* was: debug_printf("STATE = LOCKED (unlock: thr<100 + yaw>900 hold 1s)\r\n"); */
-            break;
-        case IDLE:      /* debug_printf("STATE = IDLE\r\n"); */      break;
-        case NORMAL:    /* debug_printf("STATE = NORMAL\r\n"); */    break;
-        case FIX_HEIGHT:/* debug_printf("STATE = FIX_HEIGHT\r\n"); */break;
-        case FAIL:      /* debug_printf("STATE = FAIL\r\n"); */      break;
-        default: break;
-        }
-    }
 }
 
 /**
@@ -278,9 +251,9 @@ void App_send_telemetry(void)
     // 电压分压比 = (R1+R2)/R2，R1=R2=100k → (200k/100k) = 2.0
     #define VOLTAGE_DIVIDER_RATIO 2.0f
 
-    /* 读取 BMP280 高度 */
+    /* 读取融合高度（Com_height 激光+气压计融合，cm） */
     extern volatile float g_bmp280_altitude;
-    g_bmp280_altitude = BMP280_Get_Altitude(BMP280_Get_SeaLevel_Pressure());
+    g_bmp280_altitude = Common_Height_GetFused();
 
     /* 读取电池电压：PB1 → ADC1_IN9 */
     extern volatile float g_battery_voltage;
@@ -305,6 +278,9 @@ void App_send_telemetry(void)
     uint16_t volt_dmv = (uint16_t)(g_battery_voltage * 10.0f);  /* 0.1V单位 */
     alt_pkt[6] = (uint8_t)(volt_dmv >> 8);
     alt_pkt[7] = (uint8_t)(volt_dmv & 0xFF);
+    /* 光流方向标志（byte 8-9） */
+    alt_pkt[8] = (g_flow_data.disp.delta_x != 0) ? 1 : 0;  /* 前后有移动 */
+    alt_pkt[9] = (g_flow_data.disp.delta_y != 0) ? 1 : 0;  /* 左右有移动 */
 
     memcpy(NRF24L01_TxPacket, alt_pkt, NRF24L01_TX_PACKET_WIDTH);
     NRF24L01_Send();  /* 发送完成后自动切回接收模式 */

@@ -61,12 +61,18 @@ void Error_Handler(void);
 #define SPI_CSN_GPIO_Port GPIOA
 #define POWER_KEY_Pin GPIO_PIN_2
 #define POWER_KEY_GPIO_Port GPIOB
+#define SPI2_CS_Pin GPIO_PIN_12
+#define SPI2_CS_GPIO_Port GPIOB
 #define SPI_CE_Pin GPIO_PIN_8
 #define SPI_CE_GPIO_Port GPIOA
+#define MOTION_Pin GPIO_PIN_9
+#define MOTION_GPIO_Port GPIOA
 #define LED0_Pin GPIO_PIN_11
 #define LED0_GPIO_Port GPIOA
 #define LED1_Pin GPIO_PIN_12
 #define LED1_GPIO_Port GPIOA
+#define RES_3901_Pin GPIO_PIN_15
+#define RES_3901_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 

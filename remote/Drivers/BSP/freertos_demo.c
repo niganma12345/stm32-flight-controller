@@ -11,6 +11,7 @@
 #include "key.h"
 #include "mpu6050.h"
 #include "joystick.h"
+#include "FlowIcon.h"
 
 
 /* 全局变量 —— 由各任务共享 */
@@ -18,6 +19,8 @@ KeyEvent g_KeyEvent;   /* 最新按键事件（key 任务写入，task2 读取�
 volatile float g_altitude = 0.0f;  /* 飞机回传的当前海拔高度（单位: m） */
 volatile uint8_t g_plane_state = 0; /* 飞机回传的飞行状态 */
 volatile float g_voltage = 0.0f;    /* 飞机回传的电池电压（单位: V） */
+volatile uint8_t g_flow_x = 0;     /* 光流前后方向是否检测到移动 (0/1) */
+volatile uint8_t g_flow_y = 0;     /* 光流左右方向是否检测到移动 (0/1) */
 
 #define cycle_time 6  
 
@@ -163,6 +166,7 @@ void task2(void *pvParameters)
     uint8_t fix_height_flag = 0; /* 单次触发：1=发送定高切换 */
     uint32_t sum;
     uint8_t i;
+    TickType_t last_wake_time = xTaskGetTickCount();
 
     while (1)
     {
@@ -254,6 +258,8 @@ void task2(void *pvParameters)
             g_plane_state = NRF24L01_RxPacket[5];
             uint16_t volt_dmv = (uint16_t)((NRF24L01_RxPacket[6] << 8) | NRF24L01_RxPacket[7]);
             g_voltage = (float)volt_dmv / 10.0f;
+            g_flow_x = NRF24L01_RxPacket[8];   /* 光流前后移动标志 */
+            g_flow_y = NRF24L01_RxPacket[9];   /* 光流左右移动标志 */
         }
 
         /* ====== OLED 显示 ====== */
@@ -266,13 +272,28 @@ void task2(void *pvParameters)
         OLED_Printf(0, 32, OLED_8X16, "PI:%04d RO:%04d", (int)pit, (int)rol);
 
         /* 飞行状态映射 */
-        static const char *state_str[] = {"LOCKED", "IDLE", "NORMAL", "FIX_HEIGHT", "FAIL"};
-        const char *s = (g_plane_state <= 4) ? state_str[g_plane_state] : "?";
+        static const char *state_str[] = {"LOCKED", "IDLE", "NORMAL", "FIX_HEIGHT", "MANUAL", "FAIL"};
+        const char *s = (g_plane_state <= 5) ? state_str[g_plane_state] : "?";
         OLED_Printf(80,  48, OLED_8X16, "%.1fm", (double)g_altitude);
         OLED_Printf(0,  56, OLED_6X8, "%s", s);
+
+        /* 光流方向指示器（屏幕底部中央，16×16 图标） */
+        {
+            const uint8_t *flow_icon;
+            if (g_flow_x && g_flow_y)
+                flow_icon = FlowIcon_XY;
+            else if (g_flow_x)
+                flow_icon = FlowIcon_X;
+            else if (g_flow_y)
+                flow_icon = FlowIcon_Y;
+            else
+                flow_icon = FlowIcon_None;
+            OLED_ShowImage(56, 47, 16, 16, flow_icon);
+        }
+
         OLED_Update();
 
-        vTaskDelay(6);
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(cycle_time));
     }
 }
 
