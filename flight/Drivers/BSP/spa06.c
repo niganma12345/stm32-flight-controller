@@ -1,4 +1,4 @@
-#include "bmp280.h"
+#include "spa06.h"
 #include <math.h>
 
 SPA06_TypeDef spa06;

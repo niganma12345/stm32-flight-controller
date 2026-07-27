@@ -10,7 +10,7 @@
 #include "Com_height.h"
 #include "motor.h"
 #include "mpu6050.h"
-#include "bmp280.h"
+#include "spa06.h"
 
 /* ---- 最大倾斜角限制（自稳模式安全保护）---- */
 #define MAX_TILT_ANGLE  30.0f   /* 俯仰/横滚最大目标角度 ±30° */

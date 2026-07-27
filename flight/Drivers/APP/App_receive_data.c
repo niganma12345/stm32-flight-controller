@@ -2,7 +2,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
-#include "bmp280.h"
+#include "spa06.h"
 #include "Com_height.h"
 #include "adc.h"
 #include "App_flight.h"   /* g_flow_data 光流数据 */
@@ -252,8 +252,8 @@ void App_send_telemetry(void)
     #define VOLTAGE_DIVIDER_RATIO 2.0f
 
     /* 读取融合高度（Com_height 激光+气压计融合，cm） */
-    extern volatile float g_bmp280_altitude;
-    g_bmp280_altitude = Common_Height_GetFused();
+    extern volatile float g_spa06_altitude;
+    g_spa06_altitude = Common_Height_GetFused();
 
     /* 读取电池电压：PB1 → ADC1_IN9 */
     extern volatile float g_battery_voltage;
@@ -271,7 +271,7 @@ void App_send_telemetry(void)
     alt_pkt[0] = 'a';
     alt_pkt[1] = 'l';
     alt_pkt[2] = 't';
-    int16_t alt_cm = (int16_t)(g_bmp280_altitude * 100.0f);
+    int16_t alt_cm = (int16_t)(g_spa06_altitude * 100.0f);
     alt_pkt[3] = (uint8_t)(alt_cm >> 8);
     alt_pkt[4] = (uint8_t)(alt_cm & 0xFF);
     alt_pkt[5] = (uint8_t)flight_state;
