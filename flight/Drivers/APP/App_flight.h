@@ -19,9 +19,8 @@
 extern Flow_Data_t g_flow_data;
 extern uint16_t   g_flow_height_mm;
 
-/* ---- SPA06 状态 (0=可用, 非0=Init返回值) ---- */
+/* ---- SPA06 状态 (0=不可用, 1=可用) ---- */
 extern uint8_t g_spa06_ok;
-extern float   g_baro_alt0;
 
 /**
  * @brief 飞控任务初始化 MPU6050初始化    启动电机

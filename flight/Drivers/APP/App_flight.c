@@ -12,7 +12,6 @@
 Gyro_Accel_Struct gyro_accel_data = {0};
 
 uint8_t g_spa06_ok = 0;        /* SPA06 气压计是否可用 */
-float   g_baro_alt0 = 0.0f;     /* 起飞点绝对海拔(m), 计算相对高度用 */
 
 /* ---- 光流数据（flight_task 写入，nrf24l01_task 读取用于蓝牙输出）---- */
 Flow_Data_t g_flow_data = {0};
@@ -680,42 +679,27 @@ void App_flight_process_flow_sensors(void)
     gyro_sum_x = 0;
     gyro_sum_y = 0;
 
-    /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计融合 ---- */
+    /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计 ---- */
     {
         uint16_t laser_mm = Int_VL53L1X_GetDistance();
-        float    baro_m   = 0.0f;
+        float    baro_abs = 0.0f;
 
         if (g_spa06_ok)
         {
             SPA06_Update(&hi2c2);
-
-            /* 前 10 次累积平均 = 起飞点海拔基准 */
-            static uint8_t baro_cal_cnt = 0;
-            static float   baro_cal_sum = 0.0f;
-            if (baro_cal_cnt < 10)
-            {
-                baro_cal_sum += spa06.altitude;
-                baro_cal_cnt++;
-                if (baro_cal_cnt == 10)
-                    g_baro_alt0 = baro_cal_sum / 10.0f;
-            }
-
-            baro_m = spa06.altitude - g_baro_alt0;
-
-            /* 异常钳位 ±200m */
-            if      (baro_m >  200.0f) baro_m = 0.0f;
-            else if (baro_m < -200.0f) baro_m = 0.0f;
+            baro_abs = spa06.altitude;
         }
 
-        Common_Height_Update(laser_mm, baro_m, 0.030f);
+        /* 传入绝对海拔，模块内部自动校准基准 + 融合 */
+        Common_Height_Update(laser_mm, baro_abs, 0.030f);
         g_flow_height_mm = (uint16_t)(Common_Height_GetFused() * 1000.0f);
 
-        /* OLED: 气压/激光/融合高度 */
+        /* OLED: 气压相对高度 / 激光 / 融合高度 (单位 cm) */
         {
             float h = Common_Height_GetFused();
             App_OLED_Postf(0, OLED_ROW_1, OLED_6X8,
                 "B:%3d L:%3d F:%3d",
-                (int)(baro_m * 100.0f),
+                (int)(Common_Height_GetBaroRel() * 100.0f),
                 (int)(laser_mm / 10),
                 (int)(h * 100.0f));
         }
