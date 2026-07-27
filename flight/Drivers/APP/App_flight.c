@@ -494,46 +494,6 @@ void App_flight_fix_height_pid_process(void)
     }
 }
 
-/**
- * @brief  水平零偏校准 — 平放飞机后调用
- * @note   APP 层桥接 BSP(mpu6050) 和 COM(零偏变量)，符合分层规范
- */
-void App_flight_calibrate_level(void)
-{
-    Accel_struct cur = {0}, last = {0};
-    uint8_t stable = 0;
-
-    Int_MPU6050_Get_Acc(&last);
-    while (stable < 30)
-    {
-        Int_MPU6050_Get_Acc(&cur);
-        if (abs(cur.accel_x - last.accel_x) < 200 &&
-            abs(cur.accel_y - last.accel_y) < 200)
-            stable++;
-        else
-            stable = 0;
-        last = cur;
-        vTaskDelay(10);
-    }
-
-    int32_t ax_sum = 0, ay_sum = 0, az_sum = 0;
-    for (uint8_t i = 0; i < 100; i++)
-    {
-        Int_MPU6050_Get_Acc(&cur);
-        ax_sum += cur.accel_x;
-        ay_sum += cur.accel_y;
-        az_sum += cur.accel_z;
-        vTaskDelay(6);
-    }
-
-    float ax = (float)ax_sum / 100.0f;
-    float ay = (float)ay_sum / 100.0f;
-    float az = (float)az_sum / 100.0f;
-
-    g_pitch_zero = atan2f(ax, az) * 57.29578f;
-    g_roll_zero  = atan2f(ay, az) * 57.29578f;
-}
-
 
 
 /**

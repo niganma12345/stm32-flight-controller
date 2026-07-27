@@ -79,19 +79,8 @@
 #define MPU_FIFO_RW_REG 0X74      // FIFO读写寄存器
 #define MPU_DEVICE_ID_REG 0X75    // 器件ID寄存器
 
-/* ========== MPU6050 零偏校准值（硬编码） ========== */
-/* 首次使用时运行一次 Int_MPU6050_calculate_offset()，将串口输出的值填入下方宏 */
-/* 加速度量程 +-2g (16384 LSB/g)，陀螺仪量程 +-2000dps (16.4 LSB/(dps)) */
-#define MPU6050_ACC_X_OFFSET  0
-#define MPU6050_ACC_Y_OFFSET  0
-#define MPU6050_ACC_Z_OFFSET  0
-#define MPU6050_GYRO_X_OFFSET 0
-#define MPU6050_GYRO_Y_OFFSET 0
-#define MPU6050_GYRO_Z_OFFSET 0
-
 /**
- * @brief 初始化MPU6050芯片
- *
+ * @brief 初始化MPU6050（含开机自动零偏校准）
  */
 void Int_MPU6050_Init(void);
 

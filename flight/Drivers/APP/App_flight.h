@@ -46,10 +46,6 @@ void App_flight_control_motor(void);
  */
 void App_flight_fix_height_pid_process(void);
 
-/**
- * @brief  水平零偏校准 — 平放飞机后调用，自动计算并补偿倾角零偏
- */
-void App_flight_calibrate_level(void);
 
 /**
  * @brief 磁力计处理 — QMC5883P读取 + 航向计算 + 硬铁校准

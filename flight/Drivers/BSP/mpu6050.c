@@ -1,6 +1,13 @@
 #include "mpu6050.h"
 #include <stdio.h>
 
+/* ===== 零偏校准值（Init 自动采样填充）===== */
+static int16_t g_gx_ofs, g_gy_ofs, g_gz_ofs;
+static int16_t g_ax_ofs, g_ay_ofs, g_az_ofs;
+
+static void GetGyroRaw(int16_t *x, int16_t *y, int16_t *z);
+static void GetAccRaw(int16_t *x, int16_t *y, int16_t *z);
+
 /**
  * @brief 写寄存器
  *
@@ -71,32 +78,60 @@ void Int_MPU6050_Init(void)
     // 8. 使能加速度传感器和角速度传感器
     Int_MPU6050_Write_Reg(0x6C, 0x00);
 
-    // 9. 零偏校准已改为硬编码宏定义（见 mpu6050.h 顶部），无需在此调用
-//     Int_MPU6050_calculate_offset();
+    // 9. 自动零偏校准：静置采样 200 次取平均
+    HAL_Delay(10);
+    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+    int32_t ax_sum = 0, ay_sum = 0, az_sum = 0;
+
+    for (int i = 0; i < 200; i++)
+    {
+        int16_t raw_gx, raw_gy, raw_gz, raw_ax, raw_ay, raw_az;
+        GetGyroRaw(&raw_gx, &raw_gy, &raw_gz);
+        GetAccRaw(&raw_ax, &raw_ay, &raw_az);
+        gx_sum += raw_gx; gy_sum += raw_gy; gz_sum += raw_gz;
+        ax_sum += raw_ax; ay_sum += raw_ay; az_sum += raw_az;
+        HAL_Delay(2);
+    }
+
+    g_gx_ofs = (int16_t)(gx_sum / 200);
+    g_gy_ofs = (int16_t)(gy_sum / 200);
+    g_gz_ofs = (int16_t)(gz_sum / 200);
+    g_ax_ofs = (int16_t)(ax_sum / 200);
+    g_ay_ofs = (int16_t)(ay_sum / 200);
+    g_az_ofs = (int16_t)(az_sum / 200) - 16384;  /* Z 轴减去 1g */
 }
 
-/**
- * @brief 读取三轴角速度（使用硬编码零偏校准值）
- *
- * @param gyro
- */
+/* ---- 内部：读原始 ADC 值（不含零偏）---- */
+static void GetGyroRaw(int16_t *x, int16_t *y, int16_t *z)
+{
+    uint8_t h, l;
+    Int_MPU6050_Read_Reg(MPU_GYRO_XOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_GYRO_XOUTL_REG, &l);
+    *x = (int16_t)((h << 8) | l);
+    Int_MPU6050_Read_Reg(MPU_GYRO_YOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_GYRO_YOUTL_REG, &l);
+    *y = (int16_t)((h << 8) | l);
+    Int_MPU6050_Read_Reg(MPU_GYRO_ZOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_GYRO_ZOUTL_REG, &l);
+    *z = (int16_t)((h << 8) | l);
+}
+
+static void GetAccRaw(int16_t *x, int16_t *y, int16_t *z)
+{
+    uint8_t h, l;
+    Int_MPU6050_Read_Reg(MPU_ACCEL_XOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_ACCEL_XOUTL_REG, &l);
+    *x = (int16_t)((h << 8) | l);
+    Int_MPU6050_Read_Reg(MPU_ACCEL_YOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_ACCEL_YOUTL_REG, &l);
+    *y = (int16_t)((h << 8) | l);
+    Int_MPU6050_Read_Reg(MPU_ACCEL_ZOUTH_REG, &h); Int_MPU6050_Read_Reg(MPU_ACCEL_ZOUTL_REG, &l);
+    *z = (int16_t)((h << 8) | l);
+}
+
+/* ---- 零偏修正后输出 ---- */
 void Int_MPU6050_Get_Gyro(Gyro_struct *gyro)
 {
-    // 存储角速度的寄存器地址从0x43开始 高8位在前  XYZ的顺序
-    uint8_t hight = 0;
-    uint8_t low = 0;
-    // X轴
-    Int_MPU6050_Read_Reg(MPU_GYRO_XOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_GYRO_XOUTL_REG, &low);
-    gyro->gyro_x = (hight << 8 | low) - MPU6050_GYRO_X_OFFSET;
-    // Y轴
-    Int_MPU6050_Read_Reg(MPU_GYRO_YOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_GYRO_YOUTL_REG, &low);
-    gyro->gyro_y = (hight << 8 | low) - MPU6050_GYRO_Y_OFFSET;
-    // Z轴
-    Int_MPU6050_Read_Reg(MPU_GYRO_ZOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_GYRO_ZOUTL_REG, &low);
-    gyro->gyro_z = (hight << 8 | low) - MPU6050_GYRO_Z_OFFSET;
+    int16_t x, y, z;
+    GetGyroRaw(&x, &y, &z);
+    gyro->gyro_x = x - g_gx_ofs;
+    gyro->gyro_y = y - g_gy_ofs;
+    gyro->gyro_z = z - g_gz_ofs;
 }
 
 /**
@@ -106,20 +141,11 @@ void Int_MPU6050_Get_Gyro(Gyro_struct *gyro)
  */
 void Int_MPU6050_Get_Acc(Accel_struct *acc)
 {
-    uint8_t hight = 0;
-    uint8_t low = 0;
-    // X轴
-    Int_MPU6050_Read_Reg(MPU_ACCEL_XOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_ACCEL_XOUTL_REG, &low);
-    acc->accel_x = (hight << 8 | low) - MPU6050_ACC_X_OFFSET;
-    // Y轴
-    Int_MPU6050_Read_Reg(MPU_ACCEL_YOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_ACCEL_YOUTL_REG, &low);
-    acc->accel_y = (hight << 8 | low) - MPU6050_ACC_Y_OFFSET;
-    // Z轴
-    Int_MPU6050_Read_Reg(MPU_ACCEL_ZOUTH_REG, &hight);
-    Int_MPU6050_Read_Reg(MPU_ACCEL_ZOUTL_REG, &low);
-    acc->accel_z = (hight << 8 | low) - MPU6050_ACC_Z_OFFSET;
+    int16_t x, y, z;
+    GetAccRaw(&x, &y, &z);
+    acc->accel_x = x - g_ax_ofs;
+    acc->accel_y = y - g_ay_ofs;
+    acc->accel_z = z - g_az_ofs;
 }
 
 /**
