@@ -1,12 +1,10 @@
 #include "mpu6050.h"
 #include <stdio.h>
 
-/* ===== 零偏校准值（Init 自动采样填充）===== */
-static int16_t g_gx_ofs, g_gy_ofs, g_gz_ofs;
-static int16_t g_ax_ofs, g_ay_ofs, g_az_ofs;
+/* ===== 零偏校准值（全0，不校准）===== */
+static int16_t g_gx_ofs = 0, g_gy_ofs = 0, g_gz_ofs = 0;
+static int16_t g_ax_ofs = 0, g_ay_ofs = 0, g_az_ofs = 0;
 
-static void GetGyroRaw(int16_t *x, int16_t *y, int16_t *z);
-static void GetAccRaw(int16_t *x, int16_t *y, int16_t *z);
 
 /**
  * @brief 写寄存器
@@ -28,15 +26,7 @@ void Int_MPU6050_Read_Reg(uint8_t reg, uint8_t *data)
 }
 
 /**
- * @brief 零偏校准（仅需运行一次获取校准值）
- *
- *        将飞机水平放置后调用此函数，校准结果通过串口打印。
- *        拿到校准值后填入 mpu6050.h 中的 MPU6050_XXX_OFFSET 宏定义，
- *        之后无需再调用此函数。
- */
-/**
- * @brief 初始化MPU6050芯片
- *
+ * @brief 初始化MPU6050
  */
 void Int_MPU6050_Init(void)
 {
@@ -77,28 +67,6 @@ void Int_MPU6050_Init(void)
 
     // 8. 使能加速度传感器和角速度传感器
     Int_MPU6050_Write_Reg(0x6C, 0x00);
-
-    // 9. 自动零偏校准：静置采样 200 次取平均
-    HAL_Delay(10);
-    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
-    int32_t ax_sum = 0, ay_sum = 0, az_sum = 0;
-
-    for (int i = 0; i < 200; i++)
-    {
-        int16_t raw_gx, raw_gy, raw_gz, raw_ax, raw_ay, raw_az;
-        GetGyroRaw(&raw_gx, &raw_gy, &raw_gz);
-        GetAccRaw(&raw_ax, &raw_ay, &raw_az);
-        gx_sum += raw_gx; gy_sum += raw_gy; gz_sum += raw_gz;
-        ax_sum += raw_ax; ay_sum += raw_ay; az_sum += raw_az;
-        HAL_Delay(2);
-    }
-
-    g_gx_ofs = (int16_t)(gx_sum / 200);
-    g_gy_ofs = (int16_t)(gy_sum / 200);
-    g_gz_ofs = (int16_t)(gz_sum / 200);
-    g_ax_ofs = (int16_t)(ax_sum / 200);
-    g_ay_ofs = (int16_t)(ay_sum / 200);
-    g_az_ofs = (int16_t)(az_sum / 200) - 16384;  /* Z 轴减去 1g */
 }
 
 /* ---- 内部：读原始 ADC 值（不含零偏）---- */
@@ -135,9 +103,7 @@ void Int_MPU6050_Get_Gyro(Gyro_struct *gyro)
 }
 
 /**
- * @brief 读取三轴加速度（使用硬编码零偏校准值）
- *
- * @param acc
+ * @brief 读取三轴加速度（自动减零偏）
  */
 void Int_MPU6050_Get_Acc(Accel_struct *acc)
 {

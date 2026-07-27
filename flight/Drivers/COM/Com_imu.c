@@ -15,8 +15,7 @@ float Gyro_G = 4000.0 / 65536; // 度/s
 // 度每秒,转换弧度每秒则 2*0.03051756 * 0.0174533f = 0.0005326*2
 // float Gyro_Gr = 0.0005326f * 2;
 float Gyro_Gr = 4000.0 / 65536 / 180 * 3.1415926; // 弧度/s
-float g_pitch_zero = 2.5f;
-float g_roll_zero  = 2.2f;
+
 
 #define squa(Sq) (((float)Sq) * ((float)Sq))      /* 计算平方 */
 /**
@@ -183,9 +182,8 @@ void Common_IMU_GetEulerAngle(Gyro_Accel_Struct *gyroAccel,
                              1.0f - 2.0f * (NumQ.q2 * NumQ.q2 + NumQ.q3 * NumQ.q3)) * RtA;
     if (eulerAngle->yaw < 0.0f) eulerAngle->yaw += 360.0f;
 
-    eulerAngle->pitch = asin(vecxZ) * RtA - g_pitch_zero; // 俯仰角
-
-    eulerAngle->roll = atan2f(vecyZ, veczZ) * RtA - g_roll_zero; // 横滚角
+    eulerAngle->pitch = asin(vecxZ) * RtA;            // 俯仰角
+    eulerAngle->roll  = atan2f(vecyZ, veczZ) * RtA;   // 横滚角
 
     normAccz = gyroAccel->accel.accel_x * vecxZ + gyroAccel->accel.accel_y * vecyZ + gyroAccel->accel.accel_z * veczZ; /*Z轴垂直方向上的加速度，此值涵盖了倾斜时在Z轴角速度的向量和，不是单纯重力感应得出的值*/
 }

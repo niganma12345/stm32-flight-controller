@@ -46,8 +46,6 @@ void Common_IMU_GetEulerAngle(Gyro_Accel_Struct *gyroAccel,
                               int16_t mag_x, int16_t mag_y, int16_t mag_z);
 float Common_IMU_GetNormAccZ(void);
 
-/* 角度零偏 — 水平校准后自动填入，不依赖 mpu6050.h 的 ADC 宏 */
-extern float g_pitch_zero;
-extern float g_roll_zero;
+
 
 #endif
