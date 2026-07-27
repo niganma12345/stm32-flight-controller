@@ -9,18 +9,17 @@
 #include "QMC_MagCal.h"
 #include "App_oled.h"
 
-Gyro_Accel_Struct gyro_accel_data = {0};
+
 
 uint8_t g_spa06_ok = 1;        /* SPA06 气压计是否可用 1不可用 SPA06_Init后复制为0可用 */
-
-
-/* ---- 光流数据（flight_task 写入，nrf24l01_task 读取用于蓝牙输出）---- */
-Flow_Data_t g_flow_data = {0};
-uint16_t   g_flow_height_mm = 0;
+uint16_t   g_flow_height_mm = 0;       /*融合高度*/
 uint16_t   g_disp_laser_mm  = 0;       /* 激光原始值，供 OLED 显示 */
+
+Gyro_Accel_Struct gyro_accel_data = {0};/*姿态数据*/
+Flow_Data_t g_flow_data = {0};          /*光流数据*/
 Euler_struct euler_angle = {0};
 Gyro_struct last_gyro = {0};
-float gyro_z_sum = 0;
+
 
 /* ---- QMC5883P 磁力计校准 ---- */
 QMC_MagCal_t g_mag_cal;
@@ -171,7 +170,7 @@ extern volatile float fix_height;
 static Flight_State prev_flight_state = LOCKED;
 
 /**
- * @brief 飞控任务初始化 MPU6050初始化    启动电机
+ * @brief 飞控任务初始化 
  *
  */
 void App_flight_init(void)
@@ -220,24 +219,20 @@ void App_flight_get_euler_angle(void)
     last_gyro.gyro_y = gyro_accel_data.gyro.gyro_y;
     last_gyro.gyro_z = gyro_accel_data.gyro.gyro_z;
 
-    // 先打印角速度
-//    debug_printf(":%hd,%hd,%hd\n", gyro_accel_data.gyro.gyro_x, gyro_accel_data.gyro.gyro_y, gyro_accel_data.gyro.gyro_z);
+
 
     // 3. 对测量变化比较大的加速度 使用更高级的滤波方式 => 卡尔曼滤波
     gyro_accel_data.accel.accel_x = Common_Filter_KalmanFilter(&kfs[0], gyro_accel_data.accel.accel_x);
     gyro_accel_data.accel.accel_y = Common_Filter_KalmanFilter(&kfs[1], gyro_accel_data.accel.accel_y);
     gyro_accel_data.accel.accel_z = Common_Filter_KalmanFilter(&kfs[2], gyro_accel_data.accel.accel_z);
 
-    // 打印加速度
-    // debug_printf(":%d,%d,%d\n", gyro_accel_data.accel.accel_x, gyro_accel_data.accel.accel_y, gyro_accel_data.accel.accel_z);
+
 
     // 4. 四元数姿态解算 + 磁力计倾斜补偿融合
     Common_IMU_GetEulerAngle(&gyro_accel_data, &euler_angle, 0.006,
         g_qmc_ok,
         qmc.mx, qmc.my, qmc.mz);
 
-    // 俯仰角  横滚角  偏航角
-//     debug_printf(":%.2f,%.2f,%.2f\n", euler_angle.pitch, euler_angle.roll, euler_angle.yaw);
 }
 
 /**
@@ -303,9 +298,9 @@ void App_flight_pid_process(void)
         flow_correction_roll  = flow_corr_roll_f;
     }
 
-    /* ==================================================
-     *  俯仰角
-     * ================================================== */
+    // =================================================
+    //  俯仰角
+    //================================================== 
     pitch_pid.desire = (remote_data.pit - 500) / 20.0f + flow_correction_pitch;
     if (pitch_pid.desire >  MAX_TILT_ANGLE) pitch_pid.desire =  MAX_TILT_ANGLE;
     if (pitch_pid.desire < -MAX_TILT_ANGLE) pitch_pid.desire = -MAX_TILT_ANGLE;
