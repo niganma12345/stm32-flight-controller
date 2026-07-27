@@ -6,7 +6,6 @@
 #include "vl53l1.h"
 #include "Int_VL53L1X.h"
 #include "QMC5883P.h"
-#include "QMC_MagCal.h"
 #include "App_oled.h"
 
 
@@ -21,13 +20,7 @@ Euler_struct euler_angle = {0};
 Gyro_struct last_gyro = {0};
 
 
-/* ---- QMC5883P 磁力计校准 ---- */
-QMC_MagCal_t g_mag_cal;
-uint8_t      g_mag_calibrated = 0;   /* 0=校准中, 1=已完成 */
-int16_t      g_mag_ofs_x     = 0;    /* 硬铁校准 X 偏移 */
-int16_t      g_mag_ofs_y     = 0;    /* 硬铁校准 Y 偏移 */
-int32_t      g_mag_cal_left  = 0;    /* 校准剩余秒数 (ms)，供显示 */
-uint8_t      g_mag_cal_show  = 0;    /* 校准界面刷新标记 */
+/* ---- QMC5883P 磁力计 ---- */
 
 extern volatile Remote_Data remote_data;
 extern volatile Flight_State flight_state;
@@ -194,7 +187,6 @@ void App_flight_init(void)
 
     /* ---- QMC5883P 磁力计初始化 ---- */
     QMC5883P_Init(&hi2c2);
-    QMC_MagCal_Init(&g_mag_cal);
 
     /* ---- 高度计算层初始化 ---- */
     Common_Height_Init();
@@ -319,23 +311,18 @@ void App_flight_pid_process(void)
     Com_PID_Calc_Chain(&roll_pid, &gyro_x_pid);
 
     // ==================================================
-    //  偏航角
+    //  偏航角（磁力计硬编码偏移，始终可用）
     // ==================================================
-    if (g_mag_calibrated)
     {
         float yaw_stick = (remote_data.yaw - 500) / 50.0f;
         static float yaw_target = 0.0f;
         static Flight_State prev_yaw_state = LOCKED;
 
         /* 解锁瞬间 (LOCKED→活跃) 捕获当前航向 */
-        {
-            Flight_State cur = (Flight_State)flight_state;
-            if (prev_yaw_state == LOCKED && cur != LOCKED)
-            {
-                yaw_target = qmc.heading;
-            }
-            prev_yaw_state = cur;
-        }
+        Flight_State cur = (Flight_State)flight_state;
+        if (prev_yaw_state == LOCKED && cur != LOCKED)
+            yaw_target = euler_angle.yaw;
+        prev_yaw_state = cur;
 
         if (fabsf(yaw_stick) >= 1.0f)
         {
@@ -344,7 +331,7 @@ void App_flight_pid_process(void)
             else if (yaw_target <  0.0f)   yaw_target += 360.0f;
         }
 
-        yaw_pid.measure = qmc.heading;
+        yaw_pid.measure = euler_angle.yaw;
         yaw_pid.desire  = yaw_target;
 
         /* 误差归一化 ±180° */
@@ -355,10 +342,6 @@ void App_flight_pid_process(void)
 
         gyro_z_pid.measure = (gyro_accel_data.gyro.gyro_z * 2000.0f / 32768.0f);
         Com_PID_Calc_Chain(&yaw_pid, &gyro_z_pid);
-    }
-    else
-    {
-        gyro_z_pid.output = 0.0f;
     }
 }
 
@@ -498,47 +481,7 @@ void App_flight_fix_height_pid_process(void)
 void App_flight_process_mag(void)
 {
     QMC5883P_ReadData(&hi2c2);
-
-    /* 航向计算（校准后用偏移修正） */
-    {
-        float mx_f = (float)qmc.mx - (g_mag_calibrated ? (float)g_mag_ofs_x : 0.0f);
-        float my_f = (float)qmc.my - (g_mag_calibrated ? (float)g_mag_ofs_y : 0.0f);
-        float hd   = atan2f(my_f, mx_f) * 57.29578f;
-        if (hd < 0.0f) hd += 360.0f;
-        qmc.heading = hd;
-    }
-
-    /* 硬铁校准（上电 5 秒内旋转 360°） */
-    {
-        static TickType_t cal_start = 0;
-        if (cal_start == 0) cal_start = xTaskGetTickCount();
-
-        QMC_MagCal_Feed(&g_mag_cal, qmc.mx, qmc.my);
-
-        if (!g_mag_calibrated)
-        {
-            TickType_t now  = xTaskGetTickCount();
-            int32_t    left = 5000 - (int32_t)((now - cal_start) * portTICK_PERIOD_MS);
-            if (left <= 0)
-            {
-                QMC_MagCal_Lock(&g_mag_cal);
-                g_mag_ofs_x     = g_mag_cal.mx_offset;
-                g_mag_ofs_y     = g_mag_cal.my_offset;
-                g_mag_calibrated = 1;
-            }
-            else
-            {
-                /* 每 ~100ms 触发一次校准界面刷新 */
-                static uint8_t cal_tick = 0;
-                if (++cal_tick >= 17)
-                {
-                    cal_tick = 0;
-                    g_mag_cal_left = left;
-                    g_mag_cal_show = 1;
-                }
-            }
-        }
-    }
+    QMC5883P_ComputeHeading();
 }
 
 /**
@@ -597,11 +540,25 @@ void App_flight_process_flow_sensors(void)
  */
 void App_flight_display(void)
 {
-    /* 6ms/次太快会撑爆 OLED 队列，每 ~100ms 刷新一次即可 */
     static uint8_t tick = 0;
     if (++tick < 17) return;
     tick = 0;
 
+    /* ---- 磁力计未校准 → 只显示校准界面，不显示其他数据 ---- */
+    if (QMC_HARD_OFS_X == 0 && QMC_HARD_OFS_Y == 0)
+    {
+        App_OLED_Postf(0, OLED_ROW_0, OLED_8X16, "Mag Calib");
+        App_OLED_Postf(0, OLED_ROW_1, OLED_6X8, "Rotate 360 slowly");
+        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+            "X:%d..%d o:%d",
+            (int)qmc.mx_min, (int)qmc.mx_max,
+            (int)((qmc.mx_min + qmc.mx_max) / 2));
+        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+            "Y:%d..%d o:%d",
+            (int)qmc.my_min, (int)qmc.my_max,
+            (int)((qmc.my_min + qmc.my_max) / 2));
+        return;
+    }
 
     /* ---- ROW_0: 姿态 ---- */
     App_OLED_Postf(0, OLED_ROW_0, OLED_8X16,
@@ -614,26 +571,13 @@ void App_flight_display(void)
         (int)(g_disp_laser_mm / 10),
         (int)(g_fused_height * 100.0f));
 
-    /* ---- ROW_2+3: 磁力计校准界面 或 光流速度+航向 ---- */
-    if (g_mag_cal_show)
-    {
-        g_mag_cal_show = 0;
-        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
-            "%ds X:%d Y:%d", (int)(g_mag_cal_left / 1000 + 1), qmc.mx, qmc.my);
-        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
-            "X[%d,%d] Y[%d,%d]",
-            g_mag_cal.mx_min, g_mag_cal.mx_max,
-            g_mag_cal.my_min, g_mag_cal.my_max);
-    }
-    else if (g_mag_calibrated)
-    {
-        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
-            "X:%5d Y:%5d S:%3d",
-            (int)g_flow_data.vx,
-            (int)g_flow_data.vy,
-            g_flow_data.squal);
-        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
-            "Y:%4.0f M:%4.0f", euler_angle.yaw, qmc.heading);
-    }
+    /* ---- ROW_2+3: 光流速度 + 航向 ---- */
+    App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+        "X:%5d Y:%5d S:%3d",
+        (int)g_flow_data.vx,
+        (int)g_flow_data.vy,
+        g_flow_data.squal);
+    App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+        "Y:%4.0f M:%4.0f", euler_angle.yaw, qmc.heading);
 }
 

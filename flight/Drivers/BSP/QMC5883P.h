@@ -43,6 +43,14 @@
 #define QMC5883P_RANGE_8G       0x08    /* ±8G,   3750 LSB/G */
 #define QMC5883P_RANGE_2G       0x0C    /* ±2G,  15000 LSB/G */
 
+/* ========== 硬铁校准偏移（调试采集后填入）========== */
+/*
+ * 采集方法：旋转飞机一圈，观察 OLED ROW_2/3 显示的 min/max 和 offset。
+ *          稳定后将 offset 填入下方两个宏，重新编译即可永久生效。
+ */
+#define QMC_HARD_OFS_X  -1085   /* X 轴硬铁偏移：(mx_min + mx_max) / 2 */
+#define QMC_HARD_OFS_Y  -1026   /* Y 轴硬铁偏移：(my_min + my_max) / 2 */
+
 /* ========== 数据结构体 ========== */
 typedef struct
 {
@@ -51,6 +59,10 @@ typedef struct
     int16_t mz;     /* Z 轴原始磁通量 */
 
     float heading;  /* 航向角 (度), 0°~360° */
+
+    /* 调试：实时 min/max 跟踪（校准采集用） */
+    int16_t mx_min, mx_max;
+    int16_t my_min, my_max;
 } QMC5883P_TypeDef;
 
 extern QMC5883P_TypeDef qmc;

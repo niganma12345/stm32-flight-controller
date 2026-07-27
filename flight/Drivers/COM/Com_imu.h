@@ -12,8 +12,8 @@
  * 磁力计修正已移至 PID 层，IMU 内部仅做加速度计修正(俯仰/横滚)。
  * 设为 0 彻底关闭 IMU 磁力计 PI，避免与 PID 偏航控制冲突。
  */
-#define IMU_MAG_KP     0.0f
-#define IMU_MAG_KI     0.0f
+#define IMU_MAG_KP     2.0f    /* 磁力计PI：Kp越大拉得越快，过大易震荡 */
+#define IMU_MAG_KI     0.01f   /* 磁力计PI：Ki越大稳态误差越小，过大会超调 */
 
 /* 表示四元数的结构体 */
 typedef struct

@@ -1,9 +1,6 @@
 #include "Com_IMU.h"
+#include "QMC5883P.h"
 #include <stdbool.h>
-
-extern uint8_t g_mag_calibrated;
-extern int16_t g_mag_ofs_x;
-extern int16_t g_mag_ofs_y;
 /* ============================欧拉角计算================================== */
 /* ===============================开始===================================== */
 
@@ -116,14 +113,9 @@ void Common_IMU_GetEulerAngle(Gyro_Accel_Struct *gyroAccel,
         float cosR = cosf(quat_roll);
         float sinR = sinf(quat_roll);
 
-        /* 硬铁校准偏移量扣除 */
-        float mx_raw = (float)mag_x;
-        float my_raw = (float)mag_y;
-        if (g_mag_calibrated)
-        {
-            mx_raw -= (float)g_mag_ofs_x;
-            my_raw -= (float)g_mag_ofs_y;
-        }
+        /* 硬铁校准偏移（硬编码，参见 QMC5883P.h） */
+        float mx_raw = (float)mag_x - (float)QMC_HARD_OFS_X;
+        float my_raw = (float)mag_y - (float)QMC_HARD_OFS_Y;
 
         /* 倾斜补偿（磁力计机体 → 水平面） */
         float hx = mx_raw * cosP

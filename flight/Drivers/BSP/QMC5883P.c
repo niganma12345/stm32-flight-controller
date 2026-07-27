@@ -52,6 +52,12 @@ uint8_t QMC5883P_Init(I2C_HandleTypeDef *hi2c)
     /* 设置量程 ±8G */
     QMC_WriteReg(hi2c, QMC5883P_CTRL2, QMC5883P_RANGE_8G);
 
+    /* 初始化 min/max 跟踪 */
+    qmc.mx_min =  32767;
+    qmc.mx_max = -32768;
+    qmc.my_min =  32767;
+    qmc.my_max = -32768;
+
     g_qmc_ok = 1;
     return 0;
 }
@@ -77,19 +83,23 @@ void QMC5883P_ReadData(I2C_HandleTypeDef *hi2c)
 }
 
 /**
-  * @brief  根据 X/Y 磁通量计算航向角
+  * @brief  根据 X/Y 磁通量计算航向角（硬编码偏移校准）
   *         调用前需先调用 QMC5883P_ReadData()
-  * @note   heading = atan2(my, mx), 0°~360°
   */
 void QMC5883P_ComputeHeading(void)
 {
-    float mx = (float)qmc.mx;
-    float my = (float)qmc.my;
+    /* 实时 min/max 跟踪（校准采集用） */
+    if (qmc.mx < qmc.mx_min) qmc.mx_min = qmc.mx;
+    if (qmc.mx > qmc.mx_max) qmc.mx_max = qmc.mx;
+    if (qmc.my < qmc.my_min) qmc.my_min = qmc.my;
+    if (qmc.my > qmc.my_max) qmc.my_max = qmc.my;
 
-    float heading = atan2f(my, mx) * 180.0f / 3.14159265f;
+    /* 硬编码偏移修正 + 航向计算 */
+    float mx = (float)qmc.mx - (float)QMC_HARD_OFS_X;
+    float my = (float)qmc.my - (float)QMC_HARD_OFS_Y;
 
-    if (heading < 0)
-        heading += 360.0f;
+    float heading = atan2f(my, mx) * 57.29578f;
+    if (heading < 0.0f) heading += 360.0f;
 
     qmc.heading = heading;
 }
