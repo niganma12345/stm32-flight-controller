@@ -39,8 +39,8 @@
  * ============================================================================ */
 
 /* 融合输出 */
-static float   fused_height_m    = 0.0f;
-static float   vertical_vel_mps  = 0.0f;
+float   g_fused_height    = 0.0f;       /* 融合高度 (m)，外部直接读 */
+float   g_vertical_vel    = 0.0f;       /* 垂直速度 (m/s)，外部直接读 */
 static uint8_t initialized       = 0;
 
 static float   prev_height       = 0.0f;
@@ -59,9 +59,9 @@ static float   baro_cal_sum      = 0.0f;
 
 void Common_Height_Init(void)
 {
-    fused_height_m   = 0.0f;
+    g_fused_height   = 0.0f;
     prev_height      = 0.0f;
-    vertical_vel_mps = 0.0f;
+    g_vertical_vel   = 0.0f;
     vel_from_imu     = 0.0f;
     laser_was_ok     = 0;
 
@@ -144,10 +144,10 @@ void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s)
         uint8_t laser_first = (laser_was_ok == 0);
         laser_was_ok = 1;
 
-        if (laser_first && fused_height_m < 0.5f)
+        if (laser_first && g_fused_height < 0.5f)
         {
             /* 地面唤醒：直接赋值，不走 LPF */
-            fused_height_m = laser_m;
+            g_fused_height = laser_m;
         }
         else if (laser_mm <= LASER_TRUST_MAX_MM)
         {
@@ -155,7 +155,7 @@ void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s)
             target_h = baro_ok
                 ? laser_m * HEIGHT_FUSION_LASER_W + baro_rel_m * (1.0f - HEIGHT_FUSION_LASER_W)
                 : laser_m;
-            fused_height_m += HEIGHT_LPF_FAST * (target_h - fused_height_m);
+            g_fused_height += HEIGHT_LPF_FAST * (target_h - g_fused_height);
         }
         else if (baro_ok)
         {
@@ -163,13 +163,13 @@ void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s)
             float alpha = (float)(laser_mm - LASER_TRUST_MAX_MM)
                         / (float)(LASER_BLEND_MAX_MM - LASER_TRUST_MAX_MM);
             target_h = laser_m * (1.0f - alpha) + baro_rel_m * alpha;
-            fused_height_m += HEIGHT_LPF_SLOW * (target_h - fused_height_m);
+            g_fused_height += HEIGHT_LPF_SLOW * (target_h - g_fused_height);
         }
         else
         {
             /* 无气压：纯激光 */
             target_h = laser_m;
-            fused_height_m += HEIGHT_LPF_FAST * (target_h - fused_height_m);
+            g_fused_height += HEIGHT_LPF_FAST * (target_h - g_fused_height);
         }
     }
     else
@@ -180,12 +180,12 @@ void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s)
         {
             /* 高空 (>5m)：纯气压计 */
             target_h = baro_rel_m;
-            fused_height_m += HEIGHT_LPF_SLOW * (target_h - fused_height_m);
+            g_fused_height += HEIGHT_LPF_SLOW * (target_h - g_fused_height);
         }
         else
         {
             /* 地面：锁定为 0 */
-            fused_height_m = 0.0f;
+            g_fused_height = 0.0f;
         }
     }
 
@@ -197,27 +197,16 @@ void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s)
      *   output   = LPF(vel_imu)                 ← 低通去噪
      * ================================================================ */
     {
-        float vel_diff   = (fused_height_m - prev_height) / dt_s;
+        float vel_diff   = (g_fused_height - prev_height) / dt_s;
         float acc_z_mps2 = (Common_IMU_GetNormAccZ() - GRAVITY_1G) * 9.81f / GRAVITY_1G;
 
         vel_from_imu += acc_z_mps2 * dt_s;
         vel_from_imu += VEL_DRIFT_K * (vel_diff - vel_from_imu);
 
-        vertical_vel_mps = Common_Filter_LowPass_Float(
-            vel_from_imu, vertical_vel_mps, VEL_LPF_ALPHA);
+        g_vertical_vel = Common_Filter_LowPass_Float(
+            vel_from_imu, g_vertical_vel, VEL_LPF_ALPHA);
     }
 
-    prev_height = fused_height_m;
+    prev_height = g_fused_height;
 }
 
-float Common_Height_GetFused(void)
-{
-    if (!initialized) Common_Height_Init();
-    if (fused_height_m < 0.0f) return 0.0f;
-    return fused_height_m;
-}
-
-float Common_Height_GetVelocity(void)
-{
-    return vertical_vel_mps;
-}

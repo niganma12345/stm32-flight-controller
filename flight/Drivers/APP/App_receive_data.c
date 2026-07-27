@@ -253,7 +253,7 @@ void App_send_telemetry(void)
 
     /* 读取融合高度（Com_height 激光+气压计融合，cm） */
     extern volatile float g_spa06_altitude;
-    g_spa06_altitude = Common_Height_GetFused();
+    g_spa06_altitude = g_fused_height;
 
     /* 读取电池电压：PB1 → ADC1_IN9 */
     extern volatile float g_battery_voltage;

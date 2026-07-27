@@ -168,10 +168,6 @@ void flight_task(void *pvParameters)
         // 1. 姿态解算
         App_flight_get_euler_angle();
 
-        /* 姿态显示 */
-        App_OLED_Postf(0, OLED_ROW_0, OLED_8X16,
-                       "P:%.1f R:%.1f", euler_angle.pitch, euler_angle.roll);
-
         // 2. 磁力计（读取 + 航向 + 硬铁校准）
         App_flight_process_mag();
 
@@ -193,6 +189,9 @@ void flight_task(void *pvParameters)
 
         // 6. 电机输出
         App_flight_control_motor();
+
+        // 7. OLED 显示
+        App_flight_display();
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(cycle_time));
     }

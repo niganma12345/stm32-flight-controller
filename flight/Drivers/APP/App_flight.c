@@ -11,11 +11,13 @@
 
 Gyro_Accel_Struct gyro_accel_data = {0};
 
-uint8_t g_spa06_ok = 0;        /* SPA06 气压计是否可用 */
+uint8_t g_spa06_ok = 1;        /* SPA06 气压计是否可用 1不可用 SPA06_Init后复制为0可用 */
+
 
 /* ---- 光流数据（flight_task 写入，nrf24l01_task 读取用于蓝牙输出）---- */
 Flow_Data_t g_flow_data = {0};
 uint16_t   g_flow_height_mm = 0;
+uint16_t   g_disp_laser_mm  = 0;       /* 激光原始值，供 OLED 显示 */
 Euler_struct euler_angle = {0};
 Gyro_struct last_gyro = {0};
 float gyro_z_sum = 0;
@@ -25,6 +27,8 @@ QMC_MagCal_t g_mag_cal;
 uint8_t      g_mag_calibrated = 0;   /* 0=校准中, 1=已完成 */
 int16_t      g_mag_ofs_x     = 0;    /* 硬铁校准 X 偏移 */
 int16_t      g_mag_ofs_y     = 0;    /* 硬铁校准 Y 偏移 */
+int32_t      g_mag_cal_left  = 0;    /* 校准剩余秒数 (ms)，供显示 */
+uint8_t      g_mag_cal_show  = 0;    /* 校准界面刷新标记 */
 
 extern volatile Remote_Data remote_data;
 extern volatile Flight_State flight_state;
@@ -181,7 +185,10 @@ void App_flight_init(void)
      Motor_Init(&right_bottom_motor);
 
     // 初始化 SPA06-003 气压计
-    SPA06_Init(&hi2c2);
+     g_spa06_ok= SPA06_Init(&hi2c2);
+           
+
+
 
     /* ---- PMW3901 光流传感器初始化 ---- */
     PMW3901_Init();
@@ -517,7 +524,7 @@ void App_flight_fix_height_pid_process(void)
     /* ---- 1. 状态切换检测：刚进入定高时记录目标 + 捕获悬停油门 ---- */
     if (prev_flight_state != FIX_HEIGHT && flight_state == FIX_HEIGHT)
     {
-        fix_height   = Common_Height_GetFused();
+        fix_height   = g_fused_height;
         g_hover_thr  = (float)remote_data.thr;   /* 捕获当前油门作为悬停基准 */
     }
     /* 更新上一次状态 */
@@ -526,7 +533,7 @@ void App_flight_fix_height_pid_process(void)
     /* ---- 2. 串级 PID 计算（仅定高模式）---- */
     if (flight_state == FIX_HEIGHT)
     {
-        float fused = Common_Height_GetFused();   /* 融合高度 */
+        float fused = g_fused_height;   /* 融合高度 */
 
         /* 外环：高度位置 PID → 输出垂直速度目标 (m/s) */
         height_pos_pid.desire  = fix_height;
@@ -535,7 +542,7 @@ void App_flight_fix_height_pid_process(void)
 
         /* 内环：垂直速度 PID → 输出油门补偿（正值=加油门，负值=减油门） */
         height_vel_pid.desire  = height_pos_pid.output;  /* 位置环输出 = 速度目标 */
-        height_vel_pid.measure = Common_Height_GetVelocity();
+        height_vel_pid.measure = g_vertical_vel;
         Com_PID_Calc(&height_vel_pid);
     }
     else
@@ -632,17 +639,13 @@ void App_flight_process_mag(void)
             }
             else
             {
-                /* 每 ~100ms 刷新校准界面 */
+                /* 每 ~100ms 触发一次校准界面刷新 */
                 static uint8_t cal_tick = 0;
                 if (++cal_tick >= 17)
                 {
                     cal_tick = 0;
-                    App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
-                        "%ds X:%d Y:%d", left / 1000 + 1, qmc.mx, qmc.my);
-                    App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
-                        "X[%d,%d] Y[%d,%d]",
-                        g_mag_cal.mx_min, g_mag_cal.mx_max,
-                        g_mag_cal.my_min, g_mag_cal.my_max);
+                    g_mag_cal_left = left;
+                    g_mag_cal_show = 1;
                 }
             }
         }
@@ -682,25 +685,16 @@ void App_flight_process_flow_sensors(void)
     /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计 ---- */
     {
         uint16_t laser_mm = Int_VL53L1X_GetDistance();
+        g_disp_laser_mm = laser_mm;
 
-        if (g_spa06_ok)
+        if (g_spa06_ok==0)
         {
             SPA06_Update(&hi2c2);
             Common_Height_Calibrate(spa06.altitude);
         }
 
         Common_Height_Update(laser_mm, Common_Height_GetBaroRel(), 0.030f);
-        g_flow_height_mm = (uint16_t)(Common_Height_GetFused() * 1000.0f);
-
-        /* OLED: 气压相对高度 / 激光 / 融合高度 (单位 cm) */
-        {
-            float h = Common_Height_GetFused();
-            App_OLED_Postf(0, OLED_ROW_1, OLED_6X8,
-                "B:%3d L:%3d F:%3d",
-                (int)(Common_Height_GetBaroRel() * 100.0f),
-                (int)(laser_mm / 10),
-                (int)(h * 100.0f));
-        }
+        g_flow_height_mm = (uint16_t)(g_fused_height * 1000.0f);
     }
 
     /* ---- PMW3901 光流：读取 → 旋转补偿 → 高度补偿 → 速度 ---- */
@@ -715,16 +709,51 @@ void App_flight_process_flow_sensors(void)
     }
 
     /* 水平速度来源：光流直接解算（不使用加速度积分融合） */
+}
 
-    /* ---- OLED 调试：光流速度(PID同源) + 航向 ---- */
-    if (g_mag_calibrated)
+/**
+ * @brief 统一 OLED 显示刷新
+ *
+ * ROW_0: 姿态 P/R   ROW_1: 高度 B/L/F
+ * ROW_2: 校准界面 / 光流速度   ROW_3: 校准界面 / 航向
+ */
+void App_flight_display(void)
+{
+    /* 6ms/次太快会撑爆 OLED 队列，每 ~100ms 刷新一次即可 */
+    static uint8_t tick = 0;
+    if (++tick < 17) return;
+    tick = 0;
+
+
+    /* ---- ROW_0: 姿态 ---- */
+    App_OLED_Postf(0, OLED_ROW_0, OLED_8X16,
+        "P:%.1f R:%.1f", euler_angle.pitch, euler_angle.roll);
+
+    /* ---- ROW_1: 高度 B(气压) / L(激光) / F(融合) (cm) ---- */
+    App_OLED_Postf(0, OLED_ROW_1, OLED_6X8,
+        "B:%3d L:%3d F:%3d    ",
+        (int)(Common_Height_GetBaroRel() * 100.0f),
+        (int)(g_disp_laser_mm / 10),
+        (int)(g_fused_height * 100.0f));
+
+    /* ---- ROW_2+3: 磁力计校准界面 或 光流速度+航向 ---- */
+    if (g_mag_cal_show)
+    {
+        g_mag_cal_show = 0;
+        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+            "%ds X:%d Y:%d", (int)(g_mag_cal_left / 1000 + 1), qmc.mx, qmc.my);
+        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+            "X[%d,%d] Y[%d,%d]",
+            g_mag_cal.mx_min, g_mag_cal.mx_max,
+            g_mag_cal.my_min, g_mag_cal.my_max);
+    }
+    else if (g_mag_calibrated)
     {
         App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
             "X:%5d Y:%5d S:%3d",
             (int)g_flow_data.vx,
             (int)g_flow_data.vy,
             g_flow_data.squal);
-
         App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
             "Y:%4.0f M:%4.0f", euler_angle.yaw, qmc.heading);
     }

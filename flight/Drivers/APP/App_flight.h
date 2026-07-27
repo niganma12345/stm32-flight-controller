@@ -19,11 +19,8 @@
 extern Flow_Data_t g_flow_data;
 extern uint16_t   g_flow_height_mm;
 
-/* ---- SPA06 状态 (0=不可用, 1=可用) ---- */
-extern uint8_t g_spa06_ok;
-
 /**
- * @brief 飞控任务初始化 MPU6050初始化    启动电机
+ * @brief 飞控任务初始化 
  */
 void App_flight_init(void);
 
@@ -66,9 +63,12 @@ void App_flight_process_mag(void);
  *          - 陀螺仪累积 → 30ms 均值（旋转补偿用）
  *          - VL53L1X + SPA06 高度融合
  *          - PMW3901 光流 → 旋转补偿 → 高度补偿 → 速度解算
- *          - 加速度 → 水平速度互补滤波
- *          - OLED 调试刷新
  */
 void App_flight_process_flow_sensors(void);
+
+/**
+ * @brief 统一 OLED 显示刷新（每 6ms 调用）
+ */
+void App_flight_display(void);
 
 #endif // __APP_FLIGHT__
