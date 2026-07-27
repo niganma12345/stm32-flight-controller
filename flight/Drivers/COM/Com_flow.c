@@ -2,13 +2,6 @@
 #include "Com_filter.h"
 #include <math.h>
 
-/*============================================================================*/
-/* 光流噪声抑制参数                                                            */
-/*============================================================================*/
-#define FLOW_VEL_LPF_ALPHA     0.4f
-#define FLOW_POS_DEADBAND_MM   10.0f
-#define FLOW_VEL_DEADBAND      15.0f
-
 /**
  * @description: 坐标系映射：PMW3901 原始数据 → 飞机坐标系
  */
@@ -39,9 +32,15 @@ void Com_Flow_ApplyHeightScale(Flow_Data_t *pFlow, uint16_t height_mm)
         return;
     }
 
+    /* 像素死区：在高度补偿前掐掉 ±1~2 像素的量化噪声，不受高度放大影响 */
+    int16_t dx = pFlow->disp.delta_x;
+    int16_t dy = pFlow->disp.delta_y;
+    if (dx > -FLOW_PIXEL_DEADBAND && dx < FLOW_PIXEL_DEADBAND) dx = 0;
+    if (dy > -FLOW_PIXEL_DEADBAND && dy < FLOW_PIXEL_DEADBAND) dy = 0;
+
     float scale = (float)height_mm * FLOW_SCALE_FACTOR;
-    float raw_x = (float)pFlow->disp.delta_x * scale;
-    float raw_y = (float)pFlow->disp.delta_y * scale;
+    float raw_x = (float)dx * scale;
+    float raw_y = (float)dy * scale;
 
     if (fabsf(raw_x) < FLOW_POS_DEADBAND_MM) raw_x = 0.0f;
     if (fabsf(raw_y) < FLOW_POS_DEADBAND_MM) raw_y = 0.0f;
@@ -65,19 +64,53 @@ void Com_Flow_RemoveRotation(Flow_Data_t *pFlow,
                              float gyro_x_dps, float gyro_y_dps,
                              float dt_s)
 {
-    int16_t rot_pix = (int16_t)(gyro_x_dps * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
-    int16_t rot_piy = (int16_t)(gyro_y_dps * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
+    /* 陀螺零偏死区：低于阈值的角速度不计入旋转补偿，防止静止时漂移 */
+    #define GYRO_DEADBAND_DPS  0.5f   /* °/s，低于此值视为零偏噪声 */
+    float gx = (fabsf(gyro_x_dps) < GYRO_DEADBAND_DPS) ? 0.0f : gyro_x_dps;
+    float gy = (fabsf(gyro_y_dps) < GYRO_DEADBAND_DPS) ? 0.0f : gyro_y_dps;
 
-    pFlow->disp.delta_x += rot_piy;  /* Pitch → 前后像素补偿 */
-    pFlow->disp.delta_y += rot_pix;  /* Roll  → 左右像素补偿 */
+    int16_t rot_pix = (int16_t)(gx * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
+    int16_t rot_piy = (int16_t)(gy * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
+
+    /* 钳位：旋转补偿最多到零，防止过补偿导致符号反转 */
+    int16_t new_dx = pFlow->disp.delta_x + rot_piy;
+    int16_t new_dy = pFlow->disp.delta_y + rot_pix;
+
+    if ((pFlow->disp.delta_x > 0 && new_dx < 0) ||
+        (pFlow->disp.delta_x < 0 && new_dx > 0))
+        new_dx = 0;
+
+    if ((pFlow->disp.delta_y > 0 && new_dy < 0) ||
+        (pFlow->disp.delta_y < 0 && new_dy > 0))
+        new_dy = 0;
+
+    pFlow->disp.delta_x = new_dx;  /* Pitch → 前后像素补偿 */
+    pFlow->disp.delta_y = new_dy;  /* Roll  → 左右像素补偿 */
 }
 
 /**
- * @description: 速度计算（真实位移 ÷ 时间 → mm/s），含低通滤波 + 死区
+ * @description: 速度计算（位移滑动平均 → 瞬时速度 → 一阶LPF → 死区）
+ *
+ * 数据流（3 级递进滤波）：
+ *   ① 位移滑动平均：4 帧窗口平均像素位移，消除量化尖峰
+ *   ② 一阶低通滤波：alpha 抑制高频速度噪声
+ *   ③ 速度死区：20mm/s 以下视为静止，消除微小幅值抖动
+ *
+ * PMW3901 量化噪声说明：
+ *   在 500mm 高度时 1 像素 ≈ 10.5mm，单帧速度分辨率 350mm/s。
+ *   位移 MA 将 4 帧的像素离散误差平均化，有效分辨率提升约 √4=2 倍。
  */
 void Com_Flow_CalcVelocity(Flow_Data_t *pFlow, float dt_ms)
 {
-    /* 滤波状态保持（静态变量） */
+    /* ---- 位移滑动平均（消除像素量化噪声）---- */
+    static float disp_ma_x_buf[FLOW_DISP_MA_WINDOW] = {0};
+    static float disp_ma_y_buf[FLOW_DISP_MA_WINDOW] = {0};
+    static float disp_ma_sum_x = 0.0f;
+    static float disp_ma_sum_y = 0.0f;
+    static uint8_t disp_ma_idx = 0;
+    static uint8_t disp_ma_full = 0;
+
+    /* ---- 速度 LPF 状态保持 ---- */
     static float vx_filtered = 0.0f;
     static float vy_filtered = 0.0f;
     static uint8_t filter_init = 0;
@@ -89,11 +122,45 @@ void Com_Flow_CalcVelocity(Flow_Data_t *pFlow, float dt_ms)
         return;
     }
 
+    /* ① 更新滑动窗口：新位移进入 → 最旧退出 → 计算平均 */
+    {
+        float new_x = pFlow->pos.x;
+        float new_y = pFlow->pos.y;
+
+        if (disp_ma_full)
+        {
+            disp_ma_sum_x -= disp_ma_x_buf[disp_ma_idx];
+            disp_ma_sum_y -= disp_ma_y_buf[disp_ma_idx];
+        }
+
+        disp_ma_x_buf[disp_ma_idx] = new_x;
+        disp_ma_y_buf[disp_ma_idx] = new_y;
+        disp_ma_sum_x += new_x;
+        disp_ma_sum_y += new_y;
+        disp_ma_idx++;
+
+        float n;
+        if (disp_ma_idx >= FLOW_DISP_MA_WINDOW)
+        {
+            disp_ma_idx  = 0;
+            disp_ma_full = 1;
+            n = (float)FLOW_DISP_MA_WINDOW;
+        }
+        else
+        {
+            n = (float)disp_ma_idx;
+        }
+
+        pFlow->pos.x = disp_ma_sum_x / n;  /* 平均位移替换原始值 */
+        pFlow->pos.y = disp_ma_sum_y / n;
+    }
+
+    /* ② 瞬时速度 = 平均位移 / 时间 */
     float dt_s = dt_ms / 1000.0f;
     float raw_vx = pFlow->pos.x / dt_s;
     float raw_vy = pFlow->pos.y / dt_s;
 
-    /* 首次调用直接采用原始值，避免从 0 缓慢爬升 */
+    /* ③ 一阶低通滤波 */
     if (!filter_init)
     {
         vx_filtered = raw_vx;
@@ -102,12 +169,11 @@ void Com_Flow_CalcVelocity(Flow_Data_t *pFlow, float dt_ms)
     }
     else
     {
-        /* 一阶低通滤波 */
         vx_filtered = Common_Filter_LowPass_Float(raw_vx, vx_filtered, FLOW_VEL_LPF_ALPHA);
         vy_filtered = Common_Filter_LowPass_Float(raw_vy, vy_filtered, FLOW_VEL_LPF_ALPHA);
     }
 
-    /* ---- 速度死区：滤波后仍低于阈值视为静止 ---- */
+    /* ④ 速度死区：滤波后仍低于阈值视为静止 */
     if (fabsf(vx_filtered) < FLOW_VEL_DEADBAND) vx_filtered = 0.0f;
     if (fabsf(vy_filtered) < FLOW_VEL_DEADBAND) vy_filtered = 0.0f;
 
@@ -147,12 +213,6 @@ void Com_Flow_ProcessFull(PMW3901_MotionData_t *pMotion,
 /* 陀螺延迟旋转补偿 + 水平速度互补滤波                                         */
 /*============================================================================*/
 
-/* 互补滤波参数 — 参考项目 125Hz 调参值缩放至 30ms 调用周期 */
-#define FLOW_FUSION_ACC_BIAS_GAIN   0.0375f   /* 积分项: 0.01 × 30/8, 消除加速度零偏 */
-#define FLOW_FUSION_VEL_P_GAIN      0.075f    /* 比例项: 0.02 × 30/8, 光流直接修正 */
-#define FLOW_FUSION_ACC_SCALE       2.5f      /* 加速度→光流缩放因子, 参考项目保留 */
-#define FLOW_GYRO_DELAY_N           2         /* 陀螺延迟深度: 2×30ms = 60ms 对齐光流管线 */
-
 /**
  * @brief 带陀螺延迟对齐的旋转补偿
  *        光流传感器有约30~50ms 管线延迟，陀螺仪数据比光流"新"。
@@ -171,8 +231,20 @@ void Com_Flow_RemoveRotationDelayed(Flow_Data_t *pFlow,
     int16_t rot_pix = (int16_t)(gx_aligned * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
     int16_t rot_piy = (int16_t)(gy_aligned * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
 
-    pFlow->disp.delta_x += rot_piy;  /* Pitch → 前后像素补偿 */
-    pFlow->disp.delta_y += rot_pix;  /* Roll  → 左右像素补偿 */
+    /* 钳位：旋转补偿最多到零，防止过补偿导致符号反转 */
+    int16_t new_dx = pFlow->disp.delta_x + rot_piy;
+    int16_t new_dy = pFlow->disp.delta_y + rot_pix;
+
+    if ((pFlow->disp.delta_x > 0 && new_dx < 0) ||
+        (pFlow->disp.delta_x < 0 && new_dx > 0))
+        new_dx = 0;
+
+    if ((pFlow->disp.delta_y > 0 && new_dy < 0) ||
+        (pFlow->disp.delta_y < 0 && new_dy > 0))
+        new_dy = 0;
+
+    pFlow->disp.delta_x = new_dx;  /* Pitch → 前后像素补偿 */
+    pFlow->disp.delta_y = new_dy;  /* Roll  → 左右像素补偿 */
 }
 
 /**

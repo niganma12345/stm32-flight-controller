@@ -2,17 +2,13 @@
 
 ## 重要规则
 
+### 0. 修改代码前先 git 备份
+
+每次修改任何代码文件之前，先执行 `git add -A && git commit -m "备份: <简短描述>"` 将当前状态提交到 git，确保随时可回滚。
+
 ### 1. 永远不能更改 CubeMX 生成的文件
 
-CubeMX 生成的文件在下次重新生成配置时会被覆盖，直接修改会导致改动丢失。这些文件包括但不限于：
-
-- `Core/Inc/` 和 `Core/Src/` 下的 `main`、`gpio`、`spi`、`usart`、`tim`、`adc`、`dma`、`i2c`、`stm32f1xx_it`、`stm32f1xx_hal_msp`、`system_stm32f1xx`、`FreeRTOSConfig.h`
-- `*.ioc` 文件
-
-**需要修改时的做法：**
-- 指导用户在 CubeMX 中修改对应配置
-- 或将自定义代码放在 `/* USER CODE BEGIN */` … `/* USER CODE END */` 区域
-- 或将逻辑写入 `Drivers/` 下的独立文件中
+CubeMX 生成的文件（`Core/` 下除 `USER CODE` 区域外、`*.ioc`）会被 CubeMX 覆盖。需要修改时指导用户在 CubeMX 中操作，或将代码写入 `Drivers/` 独立文件。
 
 ### 2. 需求不明确时先讨论再动手
 
@@ -22,30 +18,8 @@ CubeMX 生成的文件在下次重新生成配置时会被覆盖，直接修改�
 
 ## 项目简介
 
-STM32F1 四轴飞行器，包含两个子项目：
-- `flight/` — 飞控（主控板），运行 FreeRTOS
-- `remote/` — 遥控器
+STM32F1 四轴飞行器：`flight/` 飞控（FreeRTOS），`remote/` 遥控器。
 
-## 开发工具
-
-- **IDE/编译器**：Keil MDK-ARM（位于 `D:\Keil5\UV4\UV4.exe`）
-- **配置工具**：STM32CubeMX（`.ioc` 文件）
-- **调试/烧录**：ST-Link
-
-## 代码分层（飞控）
-
-| 层级 | 目录 | 说明 |
-|------|------|------|
-| 硬件抽象 | `Core/` | CubeMX 生成的外设配置 |
-| 驱动层 | `Drivers/BSP/` | 传感器和外设驱动 |
-| 计算层 | `Drivers/COM/` | PID、滤波、光流计算、高度融合、姿态解算 |
-| 应用层 | `Drivers/APP/` | 飞控任务、遥控数据接收 |
-
-## 传感器
-
-- MPU6050（IMU 姿态）
-- BMP280（气压高度）
-- PMW3901（光流传感器，水平位移）
-- VL53L1X（激光测距，低空高度）
-- NRF24L01（无线通信）
-- 蓝牙串口模块
+- **IDE**：`D:\Keil5\UV4\UV4.exe`（Keil MDK-ARM），**配置**：STM32CubeMX，**烧录**：ST-Link
+- **分层**：`Core/` 硬件抽象 → `Drivers/BSP/` 驱动 → `Drivers/COM/` 计算（PID/滤波/光流/高度融合/姿态）→ `Drivers/APP/` 应用（飞控任务/遥控接收）
+- **传感器**：MPU6050、BMP280、PMW3901、VL53L1X、NRF24L01、蓝牙串口

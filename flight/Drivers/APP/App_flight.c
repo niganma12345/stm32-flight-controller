@@ -2,10 +2,12 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "Com_flow.h"
+#include "Com_height.h"
 #include "vl53l1.h"
 #include "Int_VL53L1X.h"
 #include "QMC5883P.h"
 #include "QMC_MagCal.h"
+#include "App_oled.h"
 
 Gyro_Accel_Struct gyro_accel_data = {0};
 
@@ -143,19 +145,19 @@ static float g_hover_thr = 0.0f;
  * output_max: 速度环输出的最大倾角修正量（°），防止异常时翻车
  */
 PID_Struct vel_x_pid = {
-    .kp = 0.8f,        /* °/(mm/s): 50mm/s 漂移 → 7.5° 倾角修正 */
-    .ki = 0.02f,        /* 消除稳态漂移（微风等持续扰动） */
-    .kd = 0.01f,
-    .integral_max = 5.0f,   /* 积分限幅 ±5° */
-    .output_max   = 10.0f,  /* 最大修正 ±10°（安全） */
+    .kp = 6.0f,         /* °/(mm/s): 50mm/s → 100° */
+    .ki = 0.1f,         /* 快速消除稳态漂移 */
+    .kd = 0.0f,
+    .integral_max = 5.0f,
+    .output_max   = 15.0f,  /* 最大修正 ±15° */
 };
 
 PID_Struct vel_y_pid = {
-    .kp = 0.8f,
-    .ki = 0.02f,
-    .kd = 0.1f,
+    .kp = 6.0f,
+    .ki = 0.1f,
+    .kd = 0.0f,
     .integral_max = 5.0f,
-    .output_max   = 10.0f,
+    .output_max   = 15.0f,
 };
 
 
@@ -245,54 +247,87 @@ void App_flight_pid_process(void)
     float flow_correction_pitch = 0.0f;  /* 叠加到俯仰角目标 */
     float flow_correction_roll  = 0.0f;  /* 叠加到横滚角目标 */
 
+    /* ---- 光流修正量低通滤波（平滑速度PID的阶跃输出）---- */
+    static float flow_corr_pitch_f = 0.0f;
+    static float flow_corr_roll_f  = 0.0f;
+
     if (g_flow_data.is_valid)
     {
         if (flight_state == MANUAL)
         {
-            /* 手动模式：不使用光流速度修正，清零积分防止恢复时冲击 */
             vel_x_pid.integral = 0.0f;
             vel_x_pid.last_err = 0.0f;
             vel_x_pid.output   = 0.0f;
             vel_y_pid.integral = 0.0f;
             vel_y_pid.last_err = 0.0f;
             vel_y_pid.output   = 0.0f;
-            flow_correction_pitch = 0.0f;
-            flow_correction_roll  = 0.0f;
+            flow_corr_pitch_f = Common_Filter_LowPass_Float(0.0f, flow_corr_pitch_f, FLOW_CORR_LPF_ALPHA);
+            flow_corr_roll_f  = Common_Filter_LowPass_Float(0.0f, flow_corr_roll_f,  FLOW_CORR_LPF_ALPHA);
+            flow_correction_pitch = flow_corr_pitch_f;
+            flow_correction_roll  = flow_corr_roll_f;
         }
         else
         {
-            /* 自稳/定高模式：目标速度 = 0（悬停锁定），光流抑制漂移 */
+            /* 光流速度 PID：目标速度=0 → 抑制漂移 */
             vel_x_pid.desire  = 0.0f;
-            vel_x_pid.measure = g_flow_data.vx;   /* 前后速度 mm/s */
+            vel_x_pid.measure = g_flow_data.vx;
             Com_PID_Calc(&vel_x_pid);
             flow_correction_pitch = vel_x_pid.output;
 
             vel_y_pid.desire  = 0.0f;
-            vel_y_pid.measure = g_flow_data.vy;   /* 左右速度 mm/s */
+            vel_y_pid.measure = g_flow_data.vy;
             Com_PID_Calc(&vel_y_pid);
             flow_correction_roll = vel_y_pid.output;
+
+            /* 低通平滑 */
+            flow_corr_pitch_f = Common_Filter_LowPass_Float(flow_correction_pitch, flow_corr_pitch_f, FLOW_CORR_LPF_ALPHA);
+            flow_corr_roll_f  = Common_Filter_LowPass_Float(flow_correction_roll,  flow_corr_roll_f,  FLOW_CORR_LPF_ALPHA);
+            flow_correction_pitch = flow_corr_pitch_f;
+            flow_correction_roll  = flow_corr_roll_f;
         }
     }
     else
     {
-        /* 光流无效时清零积分，避免恢复时积分冲击 */
         vel_x_pid.integral = 0.0f;
         vel_x_pid.last_err = 0.0f;
         vel_x_pid.output   = 0.0f;
-
         vel_y_pid.integral = 0.0f;
         vel_y_pid.last_err = 0.0f;
         vel_y_pid.output   = 0.0f;
+        flow_corr_pitch_f = Common_Filter_LowPass_Float(0.0f, flow_corr_pitch_f, FLOW_CORR_LPF_ALPHA);
+        flow_corr_roll_f  = Common_Filter_LowPass_Float(0.0f, flow_corr_roll_f,  FLOW_CORR_LPF_ALPHA);
+        flow_correction_pitch = flow_corr_pitch_f;
+        flow_correction_roll  = flow_corr_roll_f;
     }
 
-    // ==================================================
-    //  俯仰角
-    // ==================================================
-    // 外环的目标角度 = 遥控目标角度 + 光流速度修正
+#if FLOW_PID_TEST_ONLY
+    /* 测试模式：光流原始速度直接映射电机
+     * squal=0或255→传感器异常(未连接/浮空)，强制清零 */
+    if (g_flow_data.squal == 0 || g_flow_data.squal == 255) {
+        gyro_x_pid.output = 0.0f;
+        gyro_y_pid.output = 0.0f;
+    } else {
+        gyro_x_pid.output = -g_flow_data.vy * 1.5f;
+        gyro_y_pid.output = -g_flow_data.vx * 1.5f;
+    }
+    gyro_z_pid.output = 0.0f;
+
+    /* 清零所有 PID 状态 */
+    pitch_pid.integral = 0.0f; pitch_pid.last_err = 0.0f; pitch_pid.output = 0.0f;
+    roll_pid.integral  = 0.0f; roll_pid.last_err  = 0.0f; roll_pid.output  = 0.0f;
+    gyro_y_pid.integral = 0.0f; gyro_y_pid.last_err = 0.0f;
+    gyro_x_pid.integral = 0.0f; gyro_x_pid.last_err = 0.0f;
+    gyro_z_pid.integral = 0.0f; gyro_z_pid.last_err = 0.0f;
+    height_pos_pid.integral = 0.0f; height_pos_pid.last_err = 0.0f; height_pos_pid.output = 0.0f;
+    height_vel_pid.integral = 0.0f; height_vel_pid.last_err = 0.0f; height_vel_pid.output = 0.0f;
+#else
+    /* ==================================================
+     *  俯仰角
+     * ================================================== */
     pitch_pid.desire = (remote_data.pit - 500) / 20.0f + flow_correction_pitch;
-    // 外环的测量值 = 当前俯仰角
+    if (pitch_pid.desire >  MAX_TILT_ANGLE) pitch_pid.desire =  MAX_TILT_ANGLE;
+    if (pitch_pid.desire < -MAX_TILT_ANGLE) pitch_pid.desire = -MAX_TILT_ANGLE;
     pitch_pid.measure = euler_angle.pitch;
-    // 内环的测量值 = 当前Y轴角速度（°/s）
     gyro_y_pid.measure = (gyro_accel_data.gyro.gyro_y * 2000.0f / 32768.0f);
     Com_PID_Calc_Chain(&pitch_pid, &gyro_y_pid);
 
@@ -300,12 +335,14 @@ void App_flight_pid_process(void)
     //  横滚角
     // ==================================================
     roll_pid.desire = (remote_data.rol - 500) / 20.0f + flow_correction_roll;
+    if (roll_pid.desire >  MAX_TILT_ANGLE) roll_pid.desire =  MAX_TILT_ANGLE;
+    if (roll_pid.desire < -MAX_TILT_ANGLE) roll_pid.desire = -MAX_TILT_ANGLE;
     roll_pid.measure = euler_angle.roll;
     gyro_x_pid.measure = (gyro_accel_data.gyro.gyro_x * 2000.0f / 32768.0f);
     Com_PID_Calc_Chain(&roll_pid, &gyro_x_pid);
 
     // ==================================================
-    //  偏航角 — 磁力计航向锁定 (解锁瞬间捕获航向，杆回中保持目标不重捕获)
+    //  偏航角
     // ==================================================
     if (g_mag_calibrated)
     {
@@ -346,6 +383,7 @@ void App_flight_pid_process(void)
     {
         gyro_z_pid.output = 0.0f;
     }
+#endif
 }
 
 /**
@@ -354,6 +392,44 @@ void App_flight_pid_process(void)
  */
 void App_flight_control_motor(void)
 {
+#if FLOW_PID_TEST_ONLY
+    /* 测试模式：光流速度 → 绝对值差速（基0，移动方向侧电机转） */
+    int16_t py = (int16_t)fabsf(gyro_y_pid.output);
+    int16_t rx = (int16_t)fabsf(gyro_x_pid.output);
+
+    /* pitch: 前移→gyro_y<0→前侧加速 */
+    if (gyro_y_pid.output < 0) {
+        left_top_motor.speed     = py;
+        right_top_motor.speed    = py;
+        left_bottom_motor.speed  = 0;
+        right_bottom_motor.speed = 0;
+    } else {
+        left_top_motor.speed     = 0;
+        right_top_motor.speed    = 0;
+        left_bottom_motor.speed  = py;
+        right_bottom_motor.speed = py;
+    }
+
+    /* roll: 右移→gyro_x<0→左侧加速 */
+    if (gyro_x_pid.output < 0) {
+        left_top_motor.speed     += rx;
+        left_bottom_motor.speed  += rx;
+    } else {
+        right_top_motor.speed    += rx;
+        right_bottom_motor.speed += rx;
+    }
+
+    left_top_motor.speed     = Com_limit(left_top_motor.speed,     700, 0);
+    left_bottom_motor.speed  = Com_limit(left_bottom_motor.speed,  700, 0);
+    right_top_motor.speed    = Com_limit(right_top_motor.speed,    700, 0);
+    right_bottom_motor.speed = Com_limit(right_bottom_motor.speed, 700, 0);
+
+    Motor_SetSpeed(&left_top_motor);
+    Motor_SetSpeed(&left_bottom_motor);
+    Motor_SetSpeed(&right_top_motor);
+    Motor_SetSpeed(&right_bottom_motor);
+    return;
+#else
     // 1. 首先判断当前飞机的飞行状态
     switch (flight_state)
     {
@@ -424,6 +500,7 @@ void App_flight_control_motor(void)
     Motor_SetSpeed(&left_bottom_motor);
     Motor_SetSpeed(&right_top_motor);
     Motor_SetSpeed(&right_bottom_motor);
+#endif
 }
 
 
@@ -513,5 +590,162 @@ void App_flight_calibrate_level(void)
 
     g_pitch_zero = atan2f(ax, az) * 57.29578f;
     g_roll_zero  = atan2f(ay, az) * 57.29578f;
+}
+
+/*============================================================================*/
+/* 传感器数据采集（从 freertos_demo.c 提取，按 6ms 周期调用）                  */
+/*============================================================================*/
+
+/**
+ * @brief 磁力计处理 — 读取 + 航向计算 + 硬铁校准
+ *        每 6ms 调用一次
+ */
+void App_flight_process_mag(void)
+{
+    QMC5883P_ReadData(&hi2c2);
+
+    /* 航向计算（校准后用偏移修正） */
+    {
+        float mx_f = (float)qmc.mx - (g_mag_calibrated ? (float)g_mag_ofs_x : 0.0f);
+        float my_f = (float)qmc.my - (g_mag_calibrated ? (float)g_mag_ofs_y : 0.0f);
+        float hd   = atan2f(my_f, mx_f) * 57.29578f;
+        if (hd < 0.0f) hd += 360.0f;
+        qmc.heading = hd;
+    }
+
+    /* 硬铁校准（上电 5 秒内旋转 360°） */
+    {
+        static TickType_t cal_start = 0;
+        if (cal_start == 0) cal_start = xTaskGetTickCount();
+
+        QMC_MagCal_Feed(&g_mag_cal, qmc.mx, qmc.my);
+
+        if (!g_mag_calibrated)
+        {
+            TickType_t now  = xTaskGetTickCount();
+            int32_t    left = 5000 - (int32_t)((now - cal_start) * portTICK_PERIOD_MS);
+            if (left <= 0)
+            {
+                QMC_MagCal_Lock(&g_mag_cal);
+                g_mag_ofs_x     = g_mag_cal.mx_offset;
+                g_mag_ofs_y     = g_mag_cal.my_offset;
+                g_mag_calibrated = 1;
+            }
+            else
+            {
+                /* 每 ~100ms 刷新校准界面 */
+                static uint8_t cal_tick = 0;
+                if (++cal_tick >= 17)
+                {
+                    cal_tick = 0;
+                    App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+                        "%ds X:%d Y:%d", left / 1000 + 1, qmc.mx, qmc.my);
+                    App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+                        "X[%d,%d] Y[%d,%d]",
+                        g_mag_cal.mx_min, g_mag_cal.mx_max,
+                        g_mag_cal.my_min, g_mag_cal.my_max);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief 光流/陀螺/高度传感器处理
+ *        每 6ms 调用，内部 30ms 分频执行重量级操作：
+ *          - 陀螺仪 30ms 累积均值（旋转补偿用）
+ *          - VL53L1X + SPA06 高度融合
+ *          - PMW3901 光流读取 + 旋转补偿 + 高度补偿 + 速度解算
+ *          - 机体加速度换算 + 水平速度互补滤波
+ *          - OLED 调试输出
+ */
+void App_flight_process_flow_sensors(void)
+{
+    static uint8_t  flow_tick   = 0;
+    static int32_t  gyro_sum_x  = 0;
+    static int32_t  gyro_sum_y  = 0;
+
+    /* ---- 每个周期累积陀螺仪 ADC 值（30ms 分频后取均值）---- */
+    gyro_sum_x += gyro_accel_data.gyro.gyro_x;
+    gyro_sum_y += gyro_accel_data.gyro.gyro_y;
+
+    if (++flow_tick < 5) return;
+    flow_tick = 0;
+
+    /* ---- 以下每 30ms 执行一次 ---- */
+
+    /* 陀螺仪 30ms 均值 → °/s（±2000°/s 量程） */
+    float gyro_x_dps = (float)gyro_sum_x / 5.0f * (2000.0f / 32768.0f);
+    float gyro_y_dps = (float)gyro_sum_y / 5.0f * (2000.0f / 32768.0f);
+    gyro_sum_x = 0;
+    gyro_sum_y = 0;
+
+    /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计融合 ---- */
+    {
+        uint16_t laser_mm = Int_VL53L1X_GetDistance();
+        float    baro_m   = 0.0f;
+
+        if (g_spa06_ok)
+        {
+            SPA06_ReadData(&hi2c2);
+            SPA06_ComputeAltitude();
+
+            /* 前 10 次累积平均 = 起飞点海拔基准 */
+            static uint8_t baro_cal_cnt = 0;
+            static float   baro_cal_sum = 0.0f;
+            if (baro_cal_cnt < 10)
+            {
+                baro_cal_sum += spa06.altitude;
+                baro_cal_cnt++;
+                if (baro_cal_cnt == 10)
+                    g_baro_alt0 = baro_cal_sum / 10.0f;
+            }
+
+            baro_m = spa06.altitude - g_baro_alt0;
+
+            /* 异常钳位 ±200m */
+            if      (baro_m >  200.0f) baro_m = 0.0f;
+            else if (baro_m < -200.0f) baro_m = 0.0f;
+        }
+
+        Common_Height_Update(laser_mm, baro_m, 0.030f);
+        g_flow_height_mm = Common_Height_GetFusedMM();
+
+        /* OLED: 气压/激光/融合高度 */
+        {
+            float h = Common_Height_GetFused();
+            App_OLED_Postf(0, OLED_ROW_1, OLED_6X8,
+                "B:%3d L:%3d F:%3d",
+                (int)(baro_m * 100.0f),
+                (int)(laser_mm / 10),
+                (int)(h * 100.0f));
+        }
+    }
+
+    /* ---- PMW3901 光流：读取 → 旋转补偿 → 高度补偿 → 速度 ---- */
+    {
+        PMW3901_MotionData_t motion;
+        PMW3901_ReadMotion(&motion);
+
+        Com_Flow_MapAxis(&motion, &g_flow_data);
+        Com_Flow_RemoveRotation(&g_flow_data, gyro_x_dps, gyro_y_dps, 0.030f);
+        Com_Flow_ApplyHeightScale(&g_flow_data, g_flow_height_mm);
+        Com_Flow_CalcVelocity(&g_flow_data, 30.0f);
+    }
+
+    /* 水平速度来源：光流直接解算（不使用加速度积分融合） */
+
+    /* ---- OLED 调试：光流速度(PID同源) + 航向 ---- */
+    if (g_mag_calibrated)
+    {
+        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+            "X:%5d Y:%5d S:%3d",
+            (int)g_flow_data.vx,
+            (int)g_flow_data.vy,
+            g_flow_data.squal);
+
+        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+            "Y:%4.0f M:%4.0f", euler_angle.yaw, qmc.heading);
+    }
 }
 

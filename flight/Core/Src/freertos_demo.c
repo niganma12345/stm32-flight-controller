@@ -7,23 +7,10 @@
 #include "App_flight.h"
 #include "App_receive_data.h"
 #include "led.h"
-#include "PMW3901.h"
-#include "vl53l1.h"
 #include "BlueSerial.h"
-#include "Int_VL53L1X.h"
-#include "Com_flow.h"
-#include "Com_height.h"
 #include "App_oled.h"
-#include "QMC5883P.h"
-#include "QMC_MagCal.h"
-#include <string.h>
-#include <math.h>
 
 extern Euler_struct euler_angle;
-extern QMC_MagCal_t g_mag_cal;
-extern uint8_t      g_mag_calibrated;
-extern int16_t      g_mag_ofs_x;
-extern int16_t      g_mag_ofs_y;
 
 
 
@@ -175,199 +162,36 @@ void flight_task(void *pvParameters)
         if ((flight_state == NORMAL || flight_state == FIX_HEIGHT || flight_state == MANUAL) &&
             (now - g_last_rx_tick) > pdMS_TO_TICKS(COMM_TIMEOUT_MS))
         {
-            flight_state = FAIL;  /* 通信丢失，自动进入故障减速模式 */
+            flight_state = FAIL;
         }
 
-        // 1. 获根据MPU6050测量的数据  姿态解算得到欧拉角
+        // 1. 姿态解算
         App_flight_get_euler_angle();
 
-        /* ---- 姿态显示到 OLED 第1行 ---- */
+        /* 姿态显示 */
         App_OLED_Postf(0, OLED_ROW_0, OLED_8X16,
                        "P:%.1f R:%.1f", euler_angle.pitch, euler_angle.roll);
 
-        /* ---- QMC5883P 每 6ms 读取 + 校准采集 ---- */
-        QMC5883P_ReadData(&hi2c2);
+        // 2. 磁力计（读取 + 航向 + 硬铁校准）
+        App_flight_process_mag();
 
-        /* 计算航向（校准前裸数据，校准后用偏移修正后数据） */
-        {
-            float mx_f = (float)qmc.mx - (g_mag_calibrated ? (float)g_mag_ofs_x : 0.0f);
-            float my_f = (float)qmc.my - (g_mag_calibrated ? (float)g_mag_ofs_y : 0.0f);
-            float hd   = atan2f(my_f, mx_f) * 57.29578f;
-            if (hd < 0.0f) hd += 360.0f;
-            qmc.heading = hd;
-        }
+        // 3. 光流/陀螺/高度传感器（内部 30ms 分频）
+        App_flight_process_flow_sensors();
 
-        /* 硬铁校准 (上电 5 秒内旋转飞机 360°，6ms 采样 ≈ 833 个样点) */
-        {
-            static TickType_t cal_start = 0;
-            if (cal_start == 0) cal_start = xTaskGetTickCount();
-
-            QMC_MagCal_Feed(&g_mag_cal, qmc.mx, qmc.my);
-
-            if (!g_mag_calibrated)
-            {
-                TickType_t now   = xTaskGetTickCount();
-                int32_t    left  = 5000 - (int32_t)((now - cal_start) * portTICK_PERIOD_MS);
-                if (left <= 0)
-                {
-                    QMC_MagCal_Lock(&g_mag_cal);
-                    g_mag_ofs_x     = g_mag_cal.mx_offset;
-                    g_mag_ofs_y     = g_mag_cal.my_offset;
-                    g_mag_calibrated = 1;
-                }
-                else
-                {
-                    /* 每 ~300ms 刷新一次校准界面，避免 6ms 频率刷屏黑掉 */
-                    static uint8_t cal_tick = 0;
-                    if (++cal_tick >= 17)   /* 17 × 6ms ≈ 100ms */
-                    {
-                        cal_tick = 0;
-                        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
-                            "%ds X:%d Y:%d", left / 1000 + 1, qmc.mx, qmc.my);
-                        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
-                            "X[%d,%d] Y[%d,%d]",
-                            g_mag_cal.mx_min, g_mag_cal.mx_max,
-                            g_mag_cal.my_min, g_mag_cal.my_max);
-                    }
-                }
-            }
-        }
-
-        /* ---- 1.5 光流 + 陀螺仪累积 ---- */
-        {
-            static uint8_t  flow_tick = 0;
-            static int32_t  gyro_sum_x = 0;  /* 30ms陀螺仪累积 (ADC counts) */
-            static int32_t  gyro_sum_y = 0;
-
-            /* 每个周期累积陀螺仪，用于旋转补偿 */
-            {
-                extern Gyro_Accel_Struct gyro_accel_data;
-                gyro_sum_x += gyro_accel_data.gyro.gyro_x;
-                gyro_sum_y += gyro_accel_data.gyro.gyro_y;
-            }
-
-            if (++flow_tick >= 5)
-            {
-                flow_tick = 0;
-
-                /* 计算 30ms 陀螺仪均值，转为 °/s (MPU6050 ±2000°/s量程) */
-                float gyro_x_dps = (float)gyro_sum_x / 5.0f * (2000.0f / 32768.0f);
-                float gyro_y_dps = (float)gyro_sum_y / 5.0f * (2000.0f / 32768.0f);
-                gyro_sum_x = 0;
-                gyro_sum_y = 0;
-
-                /* VL53L1X + SPA06 → 更新高度计算层（激光+气压计融合） */
-                {
-                    uint16_t laser_mm = Int_VL53L1X_GetDistance();
-                    float    baro_m   = 0.0f;
-
-                    if (g_spa06_ok)
-                    {
-                        SPA06_ReadData(&hi2c2);
-                        SPA06_ComputeAltitude();
-
-                        /* 前 10 次读数累积取平均作为起飞点海拔基准 */
-                        static uint8_t  baro_cal_cnt = 0;
-                        static float    baro_cal_sum = 0.0f;
-                        if (baro_cal_cnt < 10)
-                        {
-                            baro_cal_sum += spa06.altitude;
-                            baro_cal_cnt++;
-                            if (baro_cal_cnt == 10)
-                                g_baro_alt0 = baro_cal_sum / 10.0f;
-                        }
-
-                        baro_m = spa06.altitude - g_baro_alt0;
-
-                        /* 异常值钳位: 相对高度不超过 ±200m */
-                        if      (baro_m >  200.0f) baro_m = 0.0f;
-                        else if (baro_m < -200.0f) baro_m = 0.0f;
-                    }
-
-                    Common_Height_Update(laser_mm, baro_m, 0.030f);
-                    g_flow_height_mm  = Common_Height_GetFusedMM();
-
-                    {
-                        float h = Common_Height_GetFused();
-                        App_OLED_Postf(0, OLED_ROW_1, OLED_6X8,
-                            "B:%d L:%d F:%d",
-                            (int)(baro_m * 100.0f),
-                            (int)(laser_mm / 10),
-                            (int)(h * 100.0f));
-                    }
-                }
-
-                /* PMW3901 读取原始运动数据 */
-                PMW3901_MotionData_t motion;
-                PMW3901_ReadMotion(&motion);
-
-                /* COM 层分步解算：映射 + 旋转补偿 + 高度 + 速度 */
-                Com_Flow_MapAxis(&motion, &g_flow_data);
-                Com_Flow_RemoveRotation(&g_flow_data, gyro_x_dps, gyro_y_dps, 0.030f);
-                Com_Flow_ApplyHeightScale(&g_flow_data, g_flow_height_mm);
-                Com_Flow_CalcVelocity(&g_flow_data, 30.0f);
-
-                /* 机体加速度换算 (±2g 量程, 16384 LSB/g → m/s²) */
-                {
-                    extern Gyro_Accel_Struct gyro_accel_data;
-                    float acc_x = gyro_accel_data.accel.accel_x * 9.81f / 16384.0f;
-                    float acc_y = gyro_accel_data.accel.accel_y * 9.81f / 16384.0f;
-                    float acc_z = gyro_accel_data.accel.accel_z * 9.81f / 16384.0f;
-
-                    /* 水平速度互补滤波 — 融合加速度积分与光流速度 */
-                    static FlowVelFusion_t g_flow_vel_fusion = {0};
-
-                    /* 非飞行状态时清零融合状态，避免恢复时积分冲击 */
-                    if (flight_state == LOCKED || flight_state == IDLE || flight_state == MANUAL)
-                    {
-                        g_flow_vel_fusion.vel_x      = 0.0f;
-                        g_flow_vel_fusion.vel_y      = 0.0f;
-                        g_flow_vel_fusion.acc_bias_x = 0.0f;
-                        g_flow_vel_fusion.acc_bias_y = 0.0f;
-                    }
-
-                    Com_Flow_VelocityFusion(&g_flow_vel_fusion,
-                        g_flow_data.vx, g_flow_data.vy,
-                        acc_x, acc_y, acc_z,
-                        euler_angle.pitch, euler_angle.roll,
-                        0.030f);
-
-                    /* 用融合速度替换原始光流速度（PID 层透明） */
-                    g_flow_data.vx = g_flow_vel_fusion.vel_x;
-                    g_flow_data.vy = g_flow_vel_fusion.vel_y;
-                }
-
-                /* OLED 第3行: 光流物理位移 */
-                if (g_mag_calibrated)
-                {
-                    App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
-                        "FB:%d LR:%d S:%d",
-                        (int)g_flow_data.pos.x,
-                        (int)g_flow_data.pos.y,
-                        g_flow_data.squal);
-                }
-
-                /* OLED 第4行: 融合航向 vs 磁力计航向 */
-                if (g_mag_calibrated)
-                {
-                    App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
-                        "Y:%.0f M:%.0f", euler_angle.yaw, qmc.heading);
-                }
-            }
-        }
-
-        // 2. 根据当前的欧拉角 + 光流速度 进行PID计算控制
+        // 4. PID 控制
         App_flight_pid_process();
 
-        // 3. 定高PID计算（每24ms执行一次 = 每4个周期）
-        static uint8_t height_tick = 0;
-        if (++height_tick >= 4)
+        // 5. 定高 PID（每 24ms = 4 周期）
         {
-            height_tick = 0;
-            App_flight_fix_height_pid_process();
+            static uint8_t height_tick = 0;
+            if (++height_tick >= 4)
+            {
+                height_tick = 0;
+                App_flight_fix_height_pid_process();
+            }
         }
 
-        // 4. 根据PID输出和飞行状态 控制电机
+        // 6. 电机输出
         App_flight_control_motor();
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(cycle_time));
@@ -427,19 +251,23 @@ void nrf24l01_task(void *pvParameters)
         }
 
 
-//        /* ---- 每 ~102ms 蓝牙输出：高度 + 光流真实位移（使用 flight_task 已处理的数据）---- */
-//        {
-//            static uint8_t  blue_tick = 0;
-//            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
-//            {
-//                blue_tick = 0;
+        /* ---- 每 ~102ms 蓝牙输出：高度 + 光流真实位移（使用 flight_task 已处理的数据）---- */
+        {
+            static uint8_t  blue_tick = 0;
+            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
+            {
+                blue_tick = 0;
 
 //                BlueSerial_Printf("[plot,%d,%d,%d]",
 //                                  g_flow_height_mm,
-//                                  (int16_t)g_flow_data.pos.x,
-//                                  (int16_t)g_flow_data.pos.y);
-//            }
-//        }
+//                                  (int)g_flow_data.vx,
+//                                  (int)g_flow_data.vy);
+							BlueSerial_Printf(":%d,%d,%d\n",
+                                  g_flow_height_mm,
+                                  (int)g_flow_data.vx,
+                                  (int)g_flow_data.vy);
+            }
+        }
 
         vTaskDelay(6);
 

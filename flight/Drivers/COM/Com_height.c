@@ -7,9 +7,13 @@
  * ============================================================================ */
 #define LASER_TRUST_MAX_MM   1200    /* 纯激光信任上限 (mm) */
 #define LASER_BLEND_MAX_MM   2000    /* 融合过渡上限 (mm) */
+#define BARO_GROUND_MAX_M    5.0f    /* 气压计地面判定阈值(m)：气压高度低于此值视为地面，
+                                       防止气压漂移导致地面高度非零，同时保证高空超量
+                                       程安全（飞行中气压值一定远大于此阈值） */
 
 #define HEIGHT_LPF_FAST      0.7f    /* 激光区 LP 滤波系数 */
 #define HEIGHT_LPF_SLOW      0.4f    /* 气压计区 LP 滤波系数 */
+#define HEIGHT_FUSION_LASER_W 0.7f   /* 低空融合激光权重（激光70% + 气压30%） */
 
 /* 垂直速度互补滤波参数 */
 #define VEL_ACC_WEIGHT        0.6f
@@ -24,6 +28,9 @@ static uint8_t initialized       = 0;
 
 static float   prev_height       = 0.0f;
 static float   vel_from_imu      = 0.0f;
+
+/* 激光有效状态追踪（用于检测无效→有效跳变） */
+static uint8_t laser_was_ok     = 0;
 
 /* ============================================================================
  * 公共 API
@@ -51,15 +58,26 @@ void Common_Height_Update(uint16_t laser_mm, float baro_altitude_m, float dt_s)
     if (laser_ok)
     {
         float laser_m = (float)laser_mm / 1000.0f;
+        uint8_t laser_first = (laser_was_ok == 0);  /* 激光无效→有效跳变 */
+        laser_was_ok = 1;
 
-        if (laser_mm <= LASER_TRUST_MAX_MM)
+        if (laser_first && fused_height_m < 0.5f)
         {
-            /* 低空: 纯激光 + 快速LPF */
-            target_h = laser_m;
+            /* 从地面唤醒（激光首帧生效）：直接赋值激光值，不走LPF，消除起飞跳变 */
+            fused_height_m = laser_m;
+        }
+        else if (laser_mm <= LASER_TRUST_MAX_MM)
+        {
+            /* 低空精确悬停区：激光+气压计LPF融合 */
+            if (baro_ok)
+                target_h = laser_m * HEIGHT_FUSION_LASER_W
+                         + baro_altitude_m * (1.0f - HEIGHT_FUSION_LASER_W);
+            else
+                target_h = laser_m;
             fused_height_m = fused_height_m * (1.0f - HEIGHT_LPF_FAST)
                            + target_h * HEIGHT_LPF_FAST;
         }
-        else if (baro_ok)
+        else if (laser_mm <= LASER_BLEND_MAX_MM && baro_ok)
         {
             /* 过渡区: 线性加权混合 laser → baro */
             float alpha = (float)(laser_mm - LASER_TRUST_MAX_MM)
@@ -70,20 +88,29 @@ void Common_Height_Update(uint16_t laser_mm, float baro_altitude_m, float dt_s)
         }
         else
         {
-            /* 无气压计: 过渡区也只用激光 */
+            /* 激光接近量程上限或无气压计：纯激光兜底 */
             target_h = laser_m;
             fused_height_m = fused_height_m * (1.0f - HEIGHT_LPF_FAST)
                            + target_h * HEIGHT_LPF_FAST;
         }
     }
-    else if (baro_ok)
+    else
     {
-        /* 激光无效: 纯气压计 + 慢LPF */
-        target_h = baro_altitude_m;
-        fused_height_m = fused_height_m * (1.0f - HEIGHT_LPF_SLOW)
-                       + target_h * HEIGHT_LPF_SLOW;
+        laser_was_ok = 0;
+
+        if (baro_ok && fabsf(baro_altitude_m) > BARO_GROUND_MAX_M)
+        {
+            /* 高空激光超量程：纯气压计（与地面锁定互斥，保证安全） */
+            target_h = baro_altitude_m;
+            fused_height_m = fused_height_m * (1.0f - HEIGHT_LPF_SLOW)
+                           + target_h * HEIGHT_LPF_SLOW;
+        }
+        else
+        {
+            /* 地面：激光无效 + 气压近零 → 高度锁定为0，消除气压漂移 */
+            fused_height_m = 0.0f;
+        }
     }
-    /* else: 两者都无效 → 保持上一次值 */
 
     /* ---- 2. 垂直速度估计 ---- */
     {
