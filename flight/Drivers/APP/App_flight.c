@@ -182,11 +182,7 @@ void App_flight_init(void)
      Motor_Init(&right_bottom_motor);
 
     // 初始化 SPA06-003 气压计
-    {
-        uint8_t code = SPA06_Init(&hi2c2);
-        g_spa06_ok = (code == 0) ? 1 : 0;
-        App_OLED_Postf(120, 0, OLED_6X8, "%d", code);
-    }
+    SPA06_Init(&hi2c2);
 
     /* ---- PMW3901 光流传感器初始化 ---- */
     PMW3901_Init();
@@ -691,8 +687,7 @@ void App_flight_process_flow_sensors(void)
 
         if (g_spa06_ok)
         {
-            SPA06_ReadData(&hi2c2);
-            SPA06_ComputeAltitude();
+            SPA06_Update(&hi2c2);
 
             /* 前 10 次累积平均 = 起飞点海拔基准 */
             static uint8_t baro_cal_cnt = 0;

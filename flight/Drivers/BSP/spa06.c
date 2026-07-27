@@ -87,39 +87,41 @@ uint8_t SPA06_Init(I2C_HandleTypeDef *hi2c)
     return 0;
 }
 
-void SPA06_ReadData(I2C_HandleTypeDef *hi2c)
+void SPA06_Update(I2C_HandleTypeDef *hi2c)
 {
     uint8_t buf[6];
     int32_t Praw, Traw;
-    float Psc, Tsc, P2, P3, P4;
+    float Psc, Tsc;
 
-    /* 原子读取6字节 (0x00-0x05) */
+    /* ---- 1. 读气压+温度原始值（6字节原子读）---- */
     rds(hi2c, SPA06_PRS_B2, buf, 6);
 
-    /* 气压在 0x00-0x02, 温度在 0x03-0x05 (DPS310 标准顺序) */
     Praw = ((int32_t)buf[0] << 16) | ((int32_t)buf[1] << 8) | (int32_t)buf[2];
     Traw = ((int32_t)buf[3] << 16) | ((int32_t)buf[4] << 8) | (int32_t)buf[5];
+
+    /* 24位 → 32位符号扩展 */
     if (Praw & 0x00800000) Praw |= 0xFF000000;
     if (Traw & 0x00800000) Traw |= 0xFF000000;
 
     Psc = (float)Praw / SPA06_KP;
     Tsc = (float)Traw / SPA06_KT;
-    P2 = Psc * Psc;
-    P3 = P2 * Psc;
-    P4 = P3 * Psc;
 
-    /* 气压补偿 (Pa → hPa) */
-    spa06.pressure = ((float)c00
-                    + (float)c10 * Psc + (float)c20 * P2
-                    + (float)c30 * P3 + (float)c40 * P4
-                    + Tsc * ((float)c01 + (float)c11 * Psc
-                           + (float)c21 * P2 + (float)c31 * P3)) / 100.0f;
-
-    /* 温度补偿 (°C) */
+    /* ---- 2. 温度补偿 (°C) ---- */
     spa06.temperature = (float)c0 * 0.5f + (float)c1 * Tsc;
-}
 
-void SPA06_ComputeAltitude(void)
-{
+    /* ---- 3. 气压补偿 (Pa → hPa) ---- */
+    {
+        float P2 = Psc * Psc;
+        float P3 = P2 * Psc;
+        float P4 = P3 * Psc;
+
+        spa06.pressure = ((float)c00
+                        + (float)c10 * Psc + (float)c20 * P2
+                        + (float)c30 * P3 + (float)c40 * P4
+                        + Tsc * ((float)c01 + (float)c11 * Psc
+                               + (float)c21 * P2 + (float)c31 * P3)) / 100.0f;
+    }
+
+    /* ---- 4. 海拔转换 (标准大气压公式) ---- */
     spa06.altitude = 44330.0f * (1.0f - powf(spa06.pressure / 1013.25f, 0.1903f));
 }

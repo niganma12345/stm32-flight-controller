@@ -78,7 +78,6 @@ extern SPA06_TypeDef spa06;
 
 /* ========== 函数声明 ========== */
 uint8_t SPA06_Init(I2C_HandleTypeDef *hi2c);
-void    SPA06_ReadData(I2C_HandleTypeDef *hi2c);
-void    SPA06_ComputeAltitude(void);
+void    SPA06_Update(I2C_HandleTypeDef *hi2c);
 
 #endif /* __SPA06_003_H */
