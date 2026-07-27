@@ -682,16 +682,14 @@ void App_flight_process_flow_sensors(void)
     /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计 ---- */
     {
         uint16_t laser_mm = Int_VL53L1X_GetDistance();
-        float    baro_abs = 0.0f;
 
         if (g_spa06_ok)
         {
             SPA06_Update(&hi2c2);
-            baro_abs = spa06.altitude;
+            Common_Height_Calibrate(spa06.altitude);
         }
 
-        /* 传入绝对海拔，模块内部自动校准基准 + 融合 */
-        Common_Height_Update(laser_mm, baro_abs, 0.030f);
+        Common_Height_Update(laser_mm, Common_Height_GetBaroRel(), 0.030f);
         g_flow_height_mm = (uint16_t)(Common_Height_GetFused() * 1000.0f);
 
         /* OLED: 气压相对高度 / 激光 / 融合高度 (单位 cm) */

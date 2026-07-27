@@ -7,49 +7,48 @@
 /* ============================================================================
  * Com_height — 高度融合与垂直速度估计
  *
- * 输入：VL53L1X 激光测距 + SPA06 绝对海拔 + MPU6050 Z轴加速度
+ * 输入：VL53L1X 激光测距 + SPA06 气压计 + MPU6050 Z轴加速度
  * 输出：融合相对高度 (m) + 垂直速度 (m/s)
  *
- * 模块内部自动完成气压计起飞基准采集，APP 层只需透传 spa06.altitude 即可。
+ * 气压计校准由模块内部管理：
+ *   1. 初始化时调用 Common_Height_Init()
+ *   2. 每周期先调用 Common_Height_Calibrate(绝对海拔) 完成起飞基准采集
+ *   3. 再调用 Common_Height_Update(激光, 相对海拔, dt) 进行融合
+ *   4. 相对海拔通过 Common_Height_GetBaroRel() 获取
  *
  * 融合策略：
  *   激光=0 + 气压<5m  → 地面锁定
- *   激光=0 + 气压>5m  → 纯气压计（高空安全）
- *   激光有效             → 低空激光+气压融合 → 过渡区线性切换 → 纯气压
+ *   激光=0 + 气压>5m  → 纯气压计
+ *   激光有效             → 低空激光+气压融合 → 过渡切换 → 纯气压
  *
  * 垂直速度：高度微分 + Z轴加速度积分互补滤波
  * ============================================================================ */
 
-/**
- * @brief 初始化/重置高度模块（含气压计起飞基准）
- */
 void Common_Height_Init(void);
 
 /**
- * @brief 输入传感器原始数据，更新融合高度和垂直速度
+ * @brief 气压计起飞基准校准（每周期调用）
  *
- * @param laser_mm   VL53L1X 测距值 (mm)，0 = 无效/超量程
- * @param baro_abs_m SPA06 绝对海拔 (m)，模块内自动减起飞基准
- * @param dt_s       距上次调用间隔 (秒)
+ * 传入 SPA06 绝对海拔，前 10 次自动锁定为起飞基准。
+ * 校准完成后仅存储数据，不再修改基准。
+ *
+ * @param baro_abs_m  SPA06 绝对海拔 (m)
+ * @retval 0  校准中
+ * @retval 1  校准完成
  */
-void Common_Height_Update(uint16_t laser_mm, float baro_abs_m, float dt_s);
+uint8_t Common_Height_Calibrate(float baro_abs_m);
 
 /**
- * @brief 获取融合后的高度（始终 ≥0）
- * @return 高度 (m)，相对起飞点
+ * @brief 输入传感器数据，更新融合高度和垂直速度
+ *
+ * @param laser_mm    VL53L1X 测距值 (mm)，0 = 无效
+ * @param baro_rel_m  气压计相对高度 (m)，校准完成前传 0
+ * @param dt_s        距上次调用间隔 (秒)
  */
+void Common_Height_Update(uint16_t laser_mm, float baro_rel_m, float dt_s);
+
 float Common_Height_GetFused(void);
-
-/**
- * @brief 获取气压计相对高度（仅供调试显示）
- * @return 气压计相对高度 (m)，未校准时返回 0
- */
 float Common_Height_GetBaroRel(void);
-
-/**
- * @brief 获取垂直速度估计
- * @return 垂直速度 (m/s)，正值 = 上升
- */
 float Common_Height_GetVelocity(void);
 
-#endif /* __COMMON_HEIGHT_H */
+#endif
