@@ -87,6 +87,16 @@ uint8_t SPA06_Init(I2C_HandleTypeDef *hi2c)
     return 0;
 }
 
+/**
+ * @brief 读取 SPA06 传感器，一次完成温度、气压、海拔全部计算
+ *
+ * @param hi2c  I2C 句柄
+ *
+ * 输出（写入全局 spa06）：
+ *   .temperature = 芯片温度 (°C)
+ *   .pressure    = 绝对气压 (hPa)，出厂系数多项式补偿
+ *   .altitude    = 绝对海拔 (m)，标准大气压公式，使用前需减去起飞基准得到相对高度
+ */
 void SPA06_Update(I2C_HandleTypeDef *hi2c)
 {
     uint8_t buf[6];

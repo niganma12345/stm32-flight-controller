@@ -708,7 +708,7 @@ void App_flight_process_flow_sensors(void)
         }
 
         Common_Height_Update(laser_mm, baro_m, 0.030f);
-        g_flow_height_mm = Common_Height_GetFusedMM();
+        g_flow_height_mm = (uint16_t)(Common_Height_GetFused() * 1000.0f);
 
         /* OLED: 气压/激光/融合高度 */
         {

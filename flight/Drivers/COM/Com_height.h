@@ -13,7 +13,7 @@
  * 使用方式：
  *   1. 初始化时调用 Common_Height_Init()
  *   2. 每次拿到新传感器数据时调用 Common_Height_Update(laser_mm, baro_m, dt_s)
- *   3. 随时通过 Common_Height_GetFused() / GetFusedMM() / GetVelocity() 读取结果
+ *   3. 随时通过 Common_Height_GetFused() / GetVelocity() 读取结果
  *
  * 融合策略：
  *   激光=0 + 气压<5m  → 地面锁定，高度=0（消除地面气压漂移）
@@ -42,20 +42,14 @@ void Common_Height_Init(void);
 void Common_Height_Update(uint16_t laser_mm, float baro_altitude_m, float dt_s);
 
 /**
- * @brief 获取融合后的高度
- * @return 高度 (m)，正值=高于起飞点
+ * @brief 获取融合后的高度（始终 ≥0）
+ * @return 高度 (m)
  */
 float Common_Height_GetFused(void);
 
 /**
- * @brief 获取融合后高度（毫米单位，供光流补偿使用）
- * @return 高度 (mm)，始终返回有效值（激光超量程时用气压计兜底）
- */
-uint16_t Common_Height_GetFusedMM(void);
-
-/**
  * @brief 获取垂直速度估计
- * @return 垂直速度 (m/s)，正值=上升，负值=下降
+ * @return 垂直速度 (m/s)，正值 = 上升，负值 = 下降
  */
 float Common_Height_GetVelocity(void);
 
