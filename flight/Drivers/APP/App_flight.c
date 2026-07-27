@@ -58,15 +58,15 @@ PID_Struct gyro_y_pid = {
 
 // 横滚PID结构体
 PID_Struct roll_pid = {
-    .kp = 4.50f,        /* 低于俯仰的7.0，避免横滚轴震荡 */
-    .ki = 0.03f,        /* 消除重心偏移造成的稳态角度偏移 */
+    .kp = 7.00f,        
+    .ki = 0.00f,       
     .kd = 0.00f,
     .integral_max = 10.0f,   /* 积分限幅 ±10° */
     .output_max   = 30.0f,   /* 输出限幅 ±30（°/s） */
 };
 // X轴角速度结构体 => 对应横滚角内环
 PID_Struct gyro_x_pid = {
-    .kp = -2.50f,       /* 低于俯仰的-3.0，配合外环降低的增益 */
+    .kp = -3.00f,       
     .ki = 0.00f,
     .kd = -0.50f,
     .integral_max = 50.0f,   /* 积分限幅 ±50（电机单位） */
@@ -186,9 +186,6 @@ void App_flight_init(void)
 
     // 初始化 SPA06-003 气压计
      g_spa06_ok= SPA06_Init(&hi2c2);
-           
-
-
 
     /* ---- PMW3901 光流传感器初始化 ---- */
     PMW3901_Init();
@@ -306,27 +303,6 @@ void App_flight_pid_process(void)
         flow_correction_roll  = flow_corr_roll_f;
     }
 
-#if FLOW_PID_TEST_ONLY
-    /* 测试模式：光流原始速度直接映射电机
-     * squal=0或255→传感器异常(未连接/浮空)，强制清零 */
-    if (g_flow_data.squal == 0 || g_flow_data.squal == 255) {
-        gyro_x_pid.output = 0.0f;
-        gyro_y_pid.output = 0.0f;
-    } else {
-        gyro_x_pid.output = -g_flow_data.vy * 1.5f;
-        gyro_y_pid.output = -g_flow_data.vx * 1.5f;
-    }
-    gyro_z_pid.output = 0.0f;
-
-    /* 清零所有 PID 状态 */
-    pitch_pid.integral = 0.0f; pitch_pid.last_err = 0.0f; pitch_pid.output = 0.0f;
-    roll_pid.integral  = 0.0f; roll_pid.last_err  = 0.0f; roll_pid.output  = 0.0f;
-    gyro_y_pid.integral = 0.0f; gyro_y_pid.last_err = 0.0f;
-    gyro_x_pid.integral = 0.0f; gyro_x_pid.last_err = 0.0f;
-    gyro_z_pid.integral = 0.0f; gyro_z_pid.last_err = 0.0f;
-    height_pos_pid.integral = 0.0f; height_pos_pid.last_err = 0.0f; height_pos_pid.output = 0.0f;
-    height_vel_pid.integral = 0.0f; height_vel_pid.last_err = 0.0f; height_vel_pid.output = 0.0f;
-#else
     /* ==================================================
      *  俯仰角
      * ================================================== */
@@ -389,7 +365,6 @@ void App_flight_pid_process(void)
     {
         gyro_z_pid.output = 0.0f;
     }
-#endif
 }
 
 /**
@@ -398,44 +373,6 @@ void App_flight_pid_process(void)
  */
 void App_flight_control_motor(void)
 {
-#if FLOW_PID_TEST_ONLY
-    /* 测试模式：光流速度 → 绝对值差速（基0，移动方向侧电机转） */
-    int16_t py = (int16_t)fabsf(gyro_y_pid.output);
-    int16_t rx = (int16_t)fabsf(gyro_x_pid.output);
-
-    /* pitch: 前移→gyro_y<0→前侧加速 */
-    if (gyro_y_pid.output < 0) {
-        left_top_motor.speed     = py;
-        right_top_motor.speed    = py;
-        left_bottom_motor.speed  = 0;
-        right_bottom_motor.speed = 0;
-    } else {
-        left_top_motor.speed     = 0;
-        right_top_motor.speed    = 0;
-        left_bottom_motor.speed  = py;
-        right_bottom_motor.speed = py;
-    }
-
-    /* roll: 右移→gyro_x<0→左侧加速 */
-    if (gyro_x_pid.output < 0) {
-        left_top_motor.speed     += rx;
-        left_bottom_motor.speed  += rx;
-    } else {
-        right_top_motor.speed    += rx;
-        right_bottom_motor.speed += rx;
-    }
-
-    left_top_motor.speed     = Com_limit(left_top_motor.speed,     700, 0);
-    left_bottom_motor.speed  = Com_limit(left_bottom_motor.speed,  700, 0);
-    right_top_motor.speed    = Com_limit(right_top_motor.speed,    700, 0);
-    right_bottom_motor.speed = Com_limit(right_bottom_motor.speed, 700, 0);
-
-    Motor_SetSpeed(&left_top_motor);
-    Motor_SetSpeed(&left_bottom_motor);
-    Motor_SetSpeed(&right_top_motor);
-    Motor_SetSpeed(&right_bottom_motor);
-    return;
-#else
     // 1. 首先判断当前飞机的飞行状态
     switch (flight_state)
     {
@@ -506,7 +443,6 @@ void App_flight_control_motor(void)
     Motor_SetSpeed(&left_bottom_motor);
     Motor_SetSpeed(&right_top_motor);
     Motor_SetSpeed(&right_bottom_motor);
-#endif
 }
 
 
@@ -598,9 +534,7 @@ void App_flight_calibrate_level(void)
     g_roll_zero  = atan2f(ay, az) * 57.29578f;
 }
 
-/*============================================================================*/
-/* 传感器数据采集（从 freertos_demo.c 提取，按 6ms 周期调用）                  */
-/*============================================================================*/
+
 
 /**
  * @brief 磁力计处理 — 读取 + 航向计算 + 硬铁校准
@@ -658,8 +592,6 @@ void App_flight_process_mag(void)
  *          - 陀螺仪 30ms 累积均值（旋转补偿用）
  *          - VL53L1X + SPA06 高度融合
  *          - PMW3901 光流读取 + 旋转补偿 + 高度补偿 + 速度解算
- *          - 机体加速度换算 + 水平速度互补滤波
- *          - OLED 调试输出
  */
 void App_flight_process_flow_sensors(void)
 {
@@ -685,30 +617,21 @@ void App_flight_process_flow_sensors(void)
     /* ---- 高度传感器：VL53L1X 激光 + SPA06 气压计 ---- */
     {
         uint16_t laser_mm = Int_VL53L1X_GetDistance();
-        g_disp_laser_mm = laser_mm;
+			  g_disp_laser_mm = laser_mm;/*屏幕显示*/
 
-        if (g_spa06_ok==0)
+        if (g_spa06_ok==0)/*判断气压计是否可用*/
         {
-            SPA06_Update(&hi2c2);
-            Common_Height_Calibrate(spa06.altitude);
+            SPA06_Update(&hi2c2);/*输出数据*/
+            Common_Height_Calibrate(spa06.altitude);/*校准  返回1校准完成*/
         }
 
-        Common_Height_Update(laser_mm, Common_Height_GetBaroRel(), 0.030f);
-        g_flow_height_mm = (uint16_t)(g_fused_height * 1000.0f);
+        Common_Height_Update(laser_mm, Common_Height_GetBaroRel(), 0.030f);/*计算融合高度与速度*/
+        g_flow_height_mm = (uint16_t)(g_fused_height * 1000.0f);/*融合高度*/
     }
 
-    /* ---- PMW3901 光流：读取 → 旋转补偿 → 高度补偿 → 速度 ---- */
-    {
-        PMW3901_MotionData_t motion;
-        PMW3901_ReadMotion(&motion);
+    /* ---- PMW3901 光流：内部读取 → 坐标映射 → 旋转补偿 → 高度补偿 → 速度 ---- */
+    Com_Flow_Update(&g_flow_data, gyro_x_dps, gyro_y_dps, g_flow_height_mm);
 
-        Com_Flow_MapAxis(&motion, &g_flow_data);
-        Com_Flow_RemoveRotation(&g_flow_data, gyro_x_dps, gyro_y_dps, 0.030f);
-        Com_Flow_ApplyHeightScale(&g_flow_data, g_flow_height_mm);
-        Com_Flow_CalcVelocity(&g_flow_data, 30.0f);
-    }
-
-    /* 水平速度来源：光流直接解算（不使用加速度积分融合） */
 }
 
 /**
