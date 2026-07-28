@@ -10,19 +10,17 @@
 #include "BlueSerial.h"
 #include "App_oled.h"
 
+
 /* 通信超时保护：记录最后一次收到有效数据的时间戳 */
 static volatile TickType_t g_last_rx_tick = 0;
 #define COMM_TIMEOUT_MS  150   /* 超时阈值：150ms 无数据则自动停转 */
 
-#define cycle_time 6
-#define POWER_TASK_PERIOD 10000
+#define CYCLE_TIME          6      /* 飞控 / 通讯 / LED 主循环周期 (ms) */
+#define POWER_TASK_PERIOD   10000  /* 电源管理任务周期 (ms) */
 
-// 飞行状态（volatile：多任务并发读写），上电默认锁定
-volatile Flight_State flight_state = LOCKED;
-// 遥控数据队列（深度1，nrf24l01_task 写入，flight_task 读取）
-QueueHandle_t remote_data_queue = NULL;
-// 遥控器连接状态（上电信任连接，收不到数据时自动断开）
-volatile Remote_State remote_state = REMOTE_CONNECTED;
+volatile Flight_State flight_state = LOCKED;           /* 飞行状态（32位原子读写） */
+QueueHandle_t       remote_data_queue = NULL;          /* 遥控数据队列（深度1） */
+EventGroupHandle_t  flight_evt_group = NULL;           /* 飞行事件组 */
 
 
 /**
@@ -65,8 +63,7 @@ TaskHandle_t power_mgmt_task_handle;
 void power_mgmt_task(void *pvParameters);
 
 /**
- * @description:
- * @return {*}
+ * @brief  创建启动任务，启动 FreeRTOS 调度器
  */
 void freertos_start(void)
 {
@@ -83,9 +80,7 @@ void freertos_start(void)
 }
 
 /**
- * @description:
- * @param {void} *pvParameters
- * @return {*}
+ * @brief  创建所有 FreeRTOS 内核对象和子任务，完成后自删除
  */
 void start_task(void *pvParameters)
 {
@@ -95,6 +90,10 @@ void start_task(void *pvParameters)
 
     /* 创建遥控数据队列（深度1，永远只保留最新值） */
     remote_data_queue = xQueueCreate(1, sizeof(Remote_Data));
+
+    /* 创建飞行事件组（初始 CONNECTED 已置位） */
+    flight_evt_group = xEventGroupCreate();
+    xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);
 
     xTaskCreate((TaskFunction_t)flight_task,
                 (char *)"flight_task",
@@ -135,9 +134,8 @@ void start_task(void *pvParameters)
 }
 
 /**
- * @description: 飞行控制任务，采集传感器数据并解算姿态角
- * @param
- * @return
+ * @brief  飞行控制任务（6ms 周期）
+ *         姿态解算 → 磁力计 → 传感器融合 → PID → 电机输出 → OLED
  */
 void flight_task(void *pvParameters)
 {
@@ -196,23 +194,22 @@ void flight_task(void *pvParameters)
         // 7. OLED 显示
         App_flight_display();
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(cycle_time));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(CYCLE_TIME));
     }
 }
 
 /**
- * @description: NRF24L01 收发合并任务
- *     使用 App_receive_data 模块完成接收、校验、应答和飞行状态管理。
- *     NRF24L01_Send() 发送完成后自动切回接收模式，不会阻塞接收。
- *     收到有效数据时更新 g_last_rx_tick，供 flight_task 做超时判断。
- * @param
- * @return
+ * @brief  NRF24L01 收发任务（6ms 周期）
+ *         - 接收遥控数据 → 校验 → 写入队列
+ *         - 维护连接状态（事件组）和飞行状态机
+ *         - 收到数据后每 200ms 回传遥测（高度/电压/光流方向）
+ *         - 更新 g_last_rx_tick 供 flight_task 超时判断
  */
 void nrf24l01_task(void *pvParameters)
 {
 
     NRF24L01_Init();
-    g_last_rx_tick = xTaskGetTickCount();  /* 初始时间戳 */
+    g_last_rx_tick = xTaskGetTickCount();   /* 初始化时间戳，避免上电即超时 */
     static TickType_t last_alt_tick = 0;
     last_alt_tick = xTaskGetTickCount();
 
@@ -221,7 +218,7 @@ void nrf24l01_task(void *pvParameters)
         /* ---- 接收遥控数据、校验、应答（由 App_receive_data 模块完成） ---- */
         uint8_t rx_result = App_receive_data();
 
-        /* 保存关机标志（App_process_flight_state 会清零，此处提前读） */
+        /* 提前保存关机标志：App_process_flight_state 会清零，必须在调用之前读取 */
         Remote_Data rd;
         uint8_t shutdown_req = 0;
         if (xQueuePeek(remote_data_queue, &rd, 0) == pdTRUE)
@@ -232,13 +229,9 @@ void nrf24l01_task(void *pvParameters)
 
         /* ---- 处理飞行状态机（解锁/定高/故障） ---- */
         App_process_flight_state();
-			
-			 // 3. 处理关机命令
+        /* ---- 关机命令 → 通知电源管理任务 ---- */
         if (shutdown_req == 1)
-        {
-            // 使用freeRTOS直接任务通知 => 通知电源任务 => 执行关机
             xTaskNotifyGive(power_mgmt_task_handle);
-        }
 
 
         /* 接收成功时更新最后收包时间戳 */
@@ -246,7 +239,7 @@ void nrf24l01_task(void *pvParameters)
         {
             g_last_rx_tick = xTaskGetTickCount();
 
-            /* ---- 每1秒读取BMP280高度和电池电压并回传 ---- */
+            /* ---- 每 200ms 回传遥测数据 ---- */
             TickType_t now = xTaskGetTickCount();
             if ((now - last_alt_tick) >= pdMS_TO_TICKS(200))
             {
@@ -281,12 +274,9 @@ void nrf24l01_task(void *pvParameters)
 }
 
 /**
- * @description: LED 灯控任务
- *               每6ms调用 Led_Process() 更新 LED0/LED1 状态
- *               LED0: 通讯状态指示 — 连接时常亮，断开500ms后熄灭
- *               LED1: 飞行状态指示 — LOCKED慢闪，解锁后常亮，故障灭
- * @param {void} *pvParameters
- * @return {*}
+ * @brief  LED 灯控任务（6ms 周期）
+ *         LED0: 通讯状态 — 连接常亮，断开 500ms 后灭
+ *         LED1: 飞行状态 — LOCKED 慢闪，解锁常亮，FAIL 灭
  */
 void led_task(void *pvParameters)
 {
@@ -303,11 +293,8 @@ void led_task(void *pvParameters)
 }
 
 /**
- * @description: TP4336 电源管理任务
- *               每10秒给PB2一个下拉脉冲保持供电
- *               遥控K1按下后 → 双击脉冲关机
- * @param {void} *pvParameters
- * @return {*}
+ * @brief  TP4336 电源管理任务
+ *         收到任务通知 → 双击脉冲关机；否则每 10s 单次脉冲维持供电
  */
 void power_mgmt_task(void *pvParameters)
 {

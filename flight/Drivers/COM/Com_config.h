@@ -3,13 +3,6 @@
 
 #include "main.h"
 
-// 连接状态
-typedef enum
-{
-    REMOTE_CONNECTED = 0,
-    REMOTE_DISCONNECTED,
-} Remote_State;
-
 // 飞行状态
 typedef enum
 {

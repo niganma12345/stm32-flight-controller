@@ -2,27 +2,24 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "event_groups.h"
 #include <string.h>
 #include "spa06.h"
 #include "Com_height.h"
 #include "adc.h"
-#include "App_flight.h"   
+#include "App_flight.h"
+#include "App_task.h"
 
 extern QueueHandle_t remote_data_queue;
 extern volatile uint8_t g_shutdown_req;
 
 uint8_t rx_buff[NRF24L01_RX_PACKET_WIDTH] = {0};
 
-// 遥控连接状态
-extern volatile Remote_State remote_state;
 // 飞行状态
 extern volatile Flight_State flight_state;
 
 // 重试次数
 uint8_t retry_count = 0;
-
-// 定高飞行目标高度（单位: m）
-extern volatile float fix_height;
 
 /**
  * @brief 接收遥控器发送的遥控数据 => 封装为结构体
@@ -98,7 +95,7 @@ void App_process_connect_state(uint8_t res)
 {
     if (res == 0)
     {
-        remote_state = REMOTE_CONNECTED;
+        xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);
         retry_count = 0;
     }
     else if (res == 1)
@@ -106,7 +103,7 @@ void App_process_connect_state(uint8_t res)
         retry_count++;
         if (retry_count >= MAX_RETRY_TIMES)
         {
-            remote_state = REMOTE_DISCONNECTED;
+            xEventGroupClearBits(flight_evt_group, EVT_REMOTE_CONNECTED);
             retry_count = 0;
         }
     }
@@ -134,7 +131,7 @@ void App_process_flight_state(void)
     {
     case LOCKED:
         // 只有在遥控已连接时才处理解锁逻辑，避免遥控断联时用旧数据误判
-        if (remote_state != REMOTE_CONNECTED)
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
         {
             break;
         }
@@ -184,7 +181,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断是否故障失联
-        if (remote_state == REMOTE_DISCONNECTED)
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
         {
             flight_state = FAIL;
         }
@@ -207,7 +204,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断故障
-        if (remote_state == REMOTE_DISCONNECTED)
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
         {
             flight_state = FAIL;
         }
@@ -230,7 +227,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断故障
-        if (remote_state == REMOTE_DISCONNECTED)
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
         {
             flight_state = FAIL;
         }

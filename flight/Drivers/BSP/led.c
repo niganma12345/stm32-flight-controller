@@ -1,7 +1,8 @@
 #include "led.h"
 
-/* 外部全局变量：多任务读写，volatile 保证可见性 */
-extern volatile Remote_State remote_state;
+#include "App_task.h"
+
+/* 外部全局变量 */
 extern volatile Flight_State flight_state;
 
 /* ---- LED0: 通讯状态指示 ---- */
@@ -37,7 +38,7 @@ void Led_Init(void)
 void Led_Process(void)
 {
     /* ---- LED0：通讯状态 ---- */
-    if (remote_state == REMOTE_CONNECTED)
+    if (xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED)
     {
         led0_off_cnt = 0;
         HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);  /* 亮（低电平） */
