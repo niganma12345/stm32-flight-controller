@@ -1,13 +1,14 @@
 #include "App_receive_data.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 #include <string.h>
 #include "spa06.h"
 #include "Com_height.h"
 #include "adc.h"
 #include "App_flight.h"   
 
-extern volatile Remote_Data remote_data;
+extern QueueHandle_t remote_data_queue;
 extern volatile uint8_t g_shutdown_req;
 
 uint8_t rx_buff[NRF24L01_RX_PACKET_WIDTH] = {0};
@@ -74,13 +75,16 @@ uint8_t App_receive_data(void)
         return 1;
     }
 
-    // 3. 数据解析
-    remote_data.thr = (rx_buff[3] << 8) | rx_buff[4];
-    remote_data.yaw = (rx_buff[5] << 8) | rx_buff[6];
-    remote_data.pit = (rx_buff[7] << 8) | rx_buff[8];
-    remote_data.rol = (rx_buff[9] << 8) | rx_buff[10];
-    remote_data.shutdown = rx_buff[11];
-    remote_data.fix_height = rx_buff[12];
+    // 3. 数据解析 → 本地结构体 → 写入队列（原子发布）
+    Remote_Data new_data;
+    new_data.thr       = (rx_buff[3] << 8) | rx_buff[4];
+    new_data.yaw       = (rx_buff[5] << 8) | rx_buff[6];
+    new_data.pit       = (rx_buff[7] << 8) | rx_buff[8];
+    new_data.rol       = (rx_buff[9] << 8) | rx_buff[10];
+    new_data.shutdown  = rx_buff[11];
+    new_data.fix_height = rx_buff[12];
+
+    xQueueOverwrite(remote_data_queue, &new_data);
 
     return 0;
 }
@@ -121,6 +125,11 @@ void App_process_flight_state(void)
     // 防重复解锁：进入LOCKED后必须先松开解锁位再打回，才能开始计数
     static uint8_t  unlock_ready = 0;  // 0=等待松杆, 1=可以开始解锁
 
+    /* 从队列读取当前遥控数据快照（本任务同时是写方，每次修改后覆盖写回） */
+    Remote_Data rd;
+    if (xQueuePeek(remote_data_queue, &rd, 0) != pdTRUE)
+        return;  /* 队列为空，尚无数据 */
+
     switch (flight_state)
     {
     case LOCKED:
@@ -131,7 +140,7 @@ void App_process_flight_state(void)
         }
 
         // 检测解锁摇杆位置：油门最低 + 偏航最右
-        if (remote_data.thr < UNLOCK_THR_MIN && remote_data.yaw > UNLOCK_YAW_MIN)
+        if (rd.thr < UNLOCK_THR_MIN && rd.yaw > UNLOCK_YAW_MIN)
         {
             // 必须在松杆一次后（unlock_ready=1）才允许计数
             if (unlock_ready)
@@ -162,17 +171,17 @@ void App_process_flight_state(void)
         unlock_cnt = 0;
         unlock_ready = 0;
         // shutdown 信号紧急停机
-        if (remote_data.shutdown == 1)
+        if (rd.shutdown == 1)
         {
             flight_state = LOCKED;
-            remote_data.shutdown = 0;
+            rd.shutdown = 0;
             break;
         }
         // 定高/定点三态切换：NORMAL → FIX_HEIGHT
-        if (remote_data.fix_height == 1)
+        if (rd.fix_height == 1)
         {
             flight_state = FIX_HEIGHT;
-            remote_data.fix_height = 0;
+            rd.fix_height = 0;
         }
         // 判断是否故障失联
         if (remote_state == REMOTE_DISCONNECTED)
@@ -185,17 +194,17 @@ void App_process_flight_state(void)
         unlock_cnt = 0;
         unlock_ready = 0;
         // shutdown 信号紧急停机
-        if (remote_data.shutdown == 1)
+        if (rd.shutdown == 1)
         {
             flight_state = LOCKED;
-            remote_data.shutdown = 0;
+            rd.shutdown = 0;
             break;
         }
         // 三态循环切换：FIX_HEIGHT → MANUAL
-        if (remote_data.fix_height == 1)
+        if (rd.fix_height == 1)
         {
             flight_state = MANUAL;
-            remote_data.fix_height = 0;
+            rd.fix_height = 0;
         }
         // 判断故障
         if (remote_state == REMOTE_DISCONNECTED)
@@ -208,17 +217,17 @@ void App_process_flight_state(void)
         unlock_cnt = 0;
         unlock_ready = 0;
         // shutdown 信号紧急停机
-        if (remote_data.shutdown == 1)
+        if (rd.shutdown == 1)
         {
             flight_state = LOCKED;
-            remote_data.shutdown = 0;
+            rd.shutdown = 0;
             break;
         }
         // 三态循环切换：MANUAL → NORMAL（回到自稳）
-        if (remote_data.fix_height == 1)
+        if (rd.fix_height == 1)
         {
             flight_state = NORMAL;
-            remote_data.fix_height = 0;
+            rd.fix_height = 0;
         }
         // 判断故障
         if (remote_state == REMOTE_DISCONNECTED)
@@ -238,6 +247,9 @@ void App_process_flight_state(void)
         unlock_ready = 0;
         break;
     }
+
+    /* 将修改后的数据写回队列（shutdown/fix_height 可能已被清零） */
+    xQueueOverwrite(remote_data_queue, &rd);
 }
 
 /**

@@ -19,8 +19,8 @@ static volatile TickType_t g_last_rx_tick = 0;
 
 // 飞行状态（volatile：多任务并发读写），上电默认锁定
 volatile Flight_State flight_state = LOCKED;
-// 遥控数据（volatile：nrf24l01_task 写入，flight_task 读取）
-volatile Remote_Data remote_data = {.thr = 0, .yaw = 500, .pit = 500, .rol = 500, .fix_height = 0, .shutdown = 0};
+// 遥控数据队列（深度1，nrf24l01_task 写入，flight_task 读取）
+QueueHandle_t remote_data_queue = NULL;
 // 遥控器连接状态（上电信任连接，收不到数据时自动断开）
 volatile Remote_State remote_state = REMOTE_CONNECTED;
 // 定高飞行的目标高度（volatile：多任务读写）
@@ -95,6 +95,9 @@ void start_task(void *pvParameters)
     /* 初始化蓝牙串口 */
     BlueSerial_Init();
 
+    /* 创建遥控数据队列（深度1，永远只保留最新值） */
+    remote_data_queue = xQueueCreate(1, sizeof(Remote_Data));
+
     xTaskCreate((TaskFunction_t)flight_task,
                 (char *)"flight_task",
                 (configSTACK_DEPTH_TYPE)FLIGHT_TASK_STACK,
@@ -154,6 +157,19 @@ void flight_task(void *pvParameters)
             flight_state = FAIL;
         }
 
+        /* ---- 从队列读取遥控数据快照（本周期内所有函数共用一份）---- */
+        Remote_Data rc;
+        if (xQueuePeek(remote_data_queue, &rc, 0) != pdTRUE)
+        {
+            /* 队列为空（尚未收到任何遥控数据），使用安全默认值 */
+            rc.thr = 0;
+            rc.yaw = 500;
+            rc.pit = 500;
+            rc.rol = 500;
+            rc.shutdown = 0;
+            rc.fix_height = 0;
+        }
+
         // 1. 姿态解算
         App_flight_get_euler_angle();
 
@@ -164,7 +180,7 @@ void flight_task(void *pvParameters)
         App_flight_process_flow_sensors();
 
         // 4. PID 控制
-        App_flight_pid_process();
+        App_flight_pid_process(&rc);
 
         // 5. 定高 PID（每 24ms = 4 周期）
         {
@@ -172,12 +188,12 @@ void flight_task(void *pvParameters)
             if (++height_tick >= 4)
             {
                 height_tick = 0;
-                App_flight_fix_height_pid_process();
+                App_flight_fix_height_pid_process(&rc);
             }
         }
 
         // 6. 电机输出
-        App_flight_control_motor();
+        App_flight_control_motor(&rc);
 
         // 7. OLED 显示
         App_flight_display();
@@ -207,6 +223,12 @@ void nrf24l01_task(void *pvParameters)
         /* ---- 接收遥控数据、校验、应答（由 App_receive_data 模块完成） ---- */
         uint8_t rx_result = App_receive_data();
 
+        /* 保存关机标志（App_process_flight_state 会清零，此处提前读） */
+        Remote_Data rd;
+        uint8_t shutdown_req = 0;
+        if (xQueuePeek(remote_data_queue, &rd, 0) == pdTRUE)
+            shutdown_req = rd.shutdown;
+
         /* ---- 处理遥控器连接状态 ---- */
         App_process_connect_state(rx_result);
 
@@ -214,7 +236,7 @@ void nrf24l01_task(void *pvParameters)
         App_process_flight_state();
 			
 			 // 3. 处理关机命令
-        if (remote_data.shutdown == 1)
+        if (shutdown_req == 1)
         {
             // 使用freeRTOS直接任务通知 => 通知电源任务 => 执行关机
             xTaskNotifyGive(power_mgmt_task_handle);

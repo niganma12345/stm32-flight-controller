@@ -22,7 +22,6 @@ Gyro_struct last_gyro = {0};
 
 /* ---- QMC5883P 磁力计 ---- */
 
-extern volatile Remote_Data remote_data;
 extern volatile Flight_State flight_state;
 extern TaskHandle_t nrf24l01_task_handle;
 // 电机结构体
@@ -223,7 +222,7 @@ void App_flight_get_euler_angle(void)
  * @brief 根据欧拉角 计算出PID的目标值
  *        光流有效时：速度PID叠加到角度外环目标值上，实现水平悬停锁定
  */
-void App_flight_pid_process(void)
+void App_flight_pid_process(const Remote_Data *rc)
 {
     /* ---- 光流速度 PID（角度环外层）---- */
     float flow_correction_pitch = 0.0f;  /* 叠加到俯仰角目标 */
@@ -285,7 +284,7 @@ void App_flight_pid_process(void)
     // =================================================
     //  俯仰角
     //================================================== 
-    pitch_pid.desire = (remote_data.pit - 500) / 20.0f + flow_correction_pitch;
+    pitch_pid.desire = (rc->pit - 500) / 20.0f + flow_correction_pitch;
     if (pitch_pid.desire >  MAX_TILT_ANGLE) pitch_pid.desire =  MAX_TILT_ANGLE;
     if (pitch_pid.desire < -MAX_TILT_ANGLE) pitch_pid.desire = -MAX_TILT_ANGLE;
     pitch_pid.measure = euler_angle.pitch;
@@ -295,7 +294,7 @@ void App_flight_pid_process(void)
     // ==================================================
     //  横滚角
     // ==================================================
-    roll_pid.desire = (remote_data.rol - 500) / 20.0f + flow_correction_roll;
+    roll_pid.desire = (rc->rol - 500) / 20.0f + flow_correction_roll;
     if (roll_pid.desire >  MAX_TILT_ANGLE) roll_pid.desire =  MAX_TILT_ANGLE;
     if (roll_pid.desire < -MAX_TILT_ANGLE) roll_pid.desire = -MAX_TILT_ANGLE;
     roll_pid.measure = euler_angle.roll;
@@ -306,7 +305,7 @@ void App_flight_pid_process(void)
     //  偏航角（磁力计硬编码偏移，始终可用）
     // ==================================================
     {
-        float yaw_stick = (remote_data.yaw - 500) / 50.0f;
+        float yaw_stick = (rc->yaw - 500) / 50.0f;
         static float yaw_target = 0.0f;
         static Flight_State prev_yaw_state = LOCKED;
 
@@ -340,7 +339,7 @@ void App_flight_pid_process(void)
  * @brief 根据PID的输出值 控制电机
  *
  */
-void App_flight_control_motor(void)
+void App_flight_control_motor(const Remote_Data *rc)
 {
     // 1. 首先判断当前飞机的飞行状态
     switch (flight_state)
@@ -356,10 +355,10 @@ void App_flight_control_motor(void)
     case NORMAL:
     case MANUAL:
         // 自稳模式 — 对角线电机配对：左前+右后(gyro_z同号) vs 左后+右前(-gyro_z)
-        left_top_motor.speed = remote_data.thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
-        left_bottom_motor.speed = remote_data.thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
-        right_top_motor.speed = remote_data.thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
-        right_bottom_motor.speed = remote_data.thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
+        left_top_motor.speed = rc->thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
+        left_bottom_motor.speed = rc->thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
+        right_top_motor.speed = rc->thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
+        right_bottom_motor.speed = rc->thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
         break;
     case FIX_HEIGHT:
         // 定高模式 → 悬停油门基准 + 自稳 + 串级高度PID修正
@@ -399,7 +398,7 @@ void App_flight_control_motor(void)
     right_bottom_motor.speed = Com_limit(right_bottom_motor.speed, 700, 0);
 
     // 安全保护 => 当油门值为<100时 => 强制将速度置为0
-    if (remote_data.thr < 100)
+    if (rc->thr < 100)
     {
         left_top_motor.speed = 0;
         left_bottom_motor.speed = 0;
@@ -424,13 +423,13 @@ void App_flight_control_motor(void)
  * 控制链路：目标高度 → height_pos_pid → 速度目标 → height_vel_pid → 油门补偿
  *                       ↑ 融合高度                         ↑ 垂直速度(微分高度+LPF)
  */
-void App_flight_fix_height_pid_process(void)
+void App_flight_fix_height_pid_process(const Remote_Data *rc)
 {
     /* ---- 1. 状态切换检测：刚进入定高时记录目标 + 捕获悬停油门 ---- */
     if (prev_flight_state != FIX_HEIGHT && flight_state == FIX_HEIGHT)
     {
         fix_height   = g_fused_height;
-        g_hover_thr  = (float)remote_data.thr;   /* 捕获当前油门作为悬停基准 */
+        g_hover_thr  = (float)rc->thr;   /* 捕获当前油门作为悬停基准 */
     }
     /* 更新上一次状态 */
     prev_flight_state = flight_state;

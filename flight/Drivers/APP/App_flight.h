@@ -31,20 +31,21 @@ void App_flight_get_euler_angle(void);
 
 /**
  * @brief 根据欧拉角 + 光流速度 计算出PID的目标值
- *        自稳/定高模式下光流有效时自动叠加水平悬停锁定修正
- *        手动模式下不使用光流，纯角度自稳
+ * @param rc 当前周期遥控数据快照
  */
-void App_flight_pid_process(void);
+void App_flight_pid_process(const Remote_Data *rc);
 
 /**
  * @brief 根据PID的输出值 控制电机
+ * @param rc 当前周期遥控数据快照
  */
-void App_flight_control_motor(void);
+void App_flight_control_motor(const Remote_Data *rc);
 
 /**
  * @brief 定高模式高度PID计算（串级：位置外环 + 速度内环）
+ * @param rc 当前周期遥控数据快照
  */
-void App_flight_fix_height_pid_process(void);
+void App_flight_fix_height_pid_process(const Remote_Data *rc);
 
 
 /**
