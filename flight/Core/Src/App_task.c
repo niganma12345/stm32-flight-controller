@@ -1,4 +1,4 @@
-#include "freertos_demo.h"
+#include "App_task.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
@@ -30,7 +30,7 @@ volatile Remote_Data remote_data = {.thr = 0, .yaw = 500, .pit = 500, .rol = 500
 volatile Remote_State remote_state = REMOTE_CONNECTED;
 // 定高飞行的目标高度（volatile：多任务读写）
 volatile float fix_height = 0.0f;
-// BMP280 测量的当前海拔高度（单位: m）
+// SPA06 测量的当前海拔高度（单位: m）
 volatile float g_spa06_altitude = 0.0f;
 // 电池电压（单位: V），PB1 ADC读取
 volatile float g_battery_voltage = 0.0f;
@@ -210,9 +210,6 @@ void nrf24l01_task(void *pvParameters)
 
     NRF24L01_Init();
     g_last_rx_tick = xTaskGetTickCount();  /* 初始时间戳 */
-
-    /* BMP280 已在 App_flight_init 中初始化，此处仅标记可用 */
-    uint8_t         spa06_ok_local = 1;
     static TickType_t last_alt_tick = 0;
     last_alt_tick = xTaskGetTickCount();
 
@@ -242,7 +239,7 @@ void nrf24l01_task(void *pvParameters)
 
             /* ---- 每1秒读取BMP280高度和电池电压并回传 ---- */
             TickType_t now = xTaskGetTickCount();
-            if (spa06_ok_local && (now - last_alt_tick) >= pdMS_TO_TICKS(200))
+            if ((now - last_alt_tick) >= pdMS_TO_TICKS(200))
             {
                 last_alt_tick = now;
                 App_send_telemetry();
@@ -256,12 +253,13 @@ void nrf24l01_task(void *pvParameters)
 //            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
 //            {
 //                blue_tick = 0;
-
+                  /*江协蓝牙串口*/
 //                BlueSerial_Printf("[plot,%d,%d,%d]",
 //                                  g_flow_height_mm,
 //                                  (int)g_flow_data.vx,
 //                                  (int)g_flow_data.vy);
-//							BlueSerial_Printf(":%d,%d,%d\n",
+				          /*vofa+蓝牙*/
+//							  BlueSerial_Printf(":%d,%d,%d\n",
 //                                  g_flow_height_mm,
 //                                  (int)g_flow_data.vx,
 //                                  (int)g_flow_data.vy);

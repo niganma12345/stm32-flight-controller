@@ -5,7 +5,7 @@
 #include "spa06.h"
 #include "Com_height.h"
 #include "adc.h"
-#include "App_flight.h"   /* g_flow_data 光流数据 */
+#include "App_flight.h"   
 
 extern volatile Remote_Data remote_data;
 extern volatile uint8_t g_shutdown_req;
@@ -241,7 +241,7 @@ void App_process_flight_state(void)
 }
 
 /**
- * @brief 读取 BMP280 高度和电池电压，打包并通过 NRF24L01 回传给遥控端
+ * @brief 读取高度和电池电压，打包并通过 NRF24L01 回传给遥控端
  *
  *        数据包格式: 'a' 'l' 't' + int16高度(cm) + flight_state + int16电压(0.1V) + 填充 → 17字节
  *        调用前需确保 BMP280 已初始化且收到遥控数据。

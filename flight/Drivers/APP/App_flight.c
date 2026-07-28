@@ -71,16 +71,8 @@ PID_Struct yaw_pid = {
     .kp = -4.00f,       /* 负值: 磁力计heading与CCW方向反号, 翻转保证负反馈 */
     .ki = 0.01f,
     .kd = 0.05f,
-    .integral_max = 15.0f,
-    .output_max   = 30.0f,
-};
-// Z轴角速度结构体 → gyro_z_pid.output: 正值 → CCW逆时针（左前+右后加速）
-PID_Struct gyro_z_pid = {
-    .kp = 4.0f,        /* 正值已验证: +gyro_z → 负反馈抑制 */
-    .ki = 0.0f,
-    .kd = 0.30f,
-    .integral_max = 50.0f,
-    .output_max   = 100.0f,  /* 与混控中 Com_limit(100,-100) 一致，防止积分windup */
+    .integral_max = 30.0f,   /* 直接混控，积分上限适度放宽 */
+    .output_max   = 100.0f,  /* 直接混控，与 Com_limit(100,-100) 一致 */
 };
 
 /*============================================================================*/
@@ -340,8 +332,7 @@ void App_flight_pid_process(void)
         else if (err < -180.0f) err += 360.0f;
         yaw_pid.desire = yaw_pid.measure + err;
 
-        gyro_z_pid.measure = (gyro_accel_data.gyro.gyro_z * 2000.0f / 32768.0f);
-        Com_PID_Calc_Chain(&yaw_pid, &gyro_z_pid);
+        Com_PID_Calc(&yaw_pid);
     }
 }
 
@@ -365,20 +356,20 @@ void App_flight_control_motor(void)
     case NORMAL:
     case MANUAL:
         // 自稳模式 — 对角线电机配对：左前+右后(gyro_z同号) vs 左后+右前(-gyro_z)
-        left_top_motor.speed = remote_data.thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100);
-        left_bottom_motor.speed = remote_data.thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100);
-        right_top_motor.speed = remote_data.thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100);
-        right_bottom_motor.speed = remote_data.thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100);
+        left_top_motor.speed = remote_data.thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
+        left_bottom_motor.speed = remote_data.thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
+        right_top_motor.speed = remote_data.thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
+        right_bottom_motor.speed = remote_data.thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
         break;
     case FIX_HEIGHT:
         // 定高模式 → 悬停油门基准 + 自稳 + 串级高度PID修正
         {
             int16_t base_thr = (int16_t)g_hover_thr;
             int16_t h_corr   = (int16_t)height_vel_pid.output;
-            left_top_motor.speed     = base_thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
-            left_bottom_motor.speed  = base_thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
-            right_top_motor.speed    = base_thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
-            right_bottom_motor.speed = base_thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
+            left_top_motor.speed     = base_thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100) + h_corr;
+            left_bottom_motor.speed  = base_thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100) + h_corr;
+            right_top_motor.speed    = base_thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100) + h_corr;
+            right_bottom_motor.speed = base_thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100) + h_corr;
         }
         break;
     case FAIL:
@@ -475,7 +466,7 @@ void App_flight_fix_height_pid_process(void)
 
 
 /**
- * @brief 磁力计处理 — 读取 + 航向计算 + 硬铁校准
+ * @brief 磁力计处理 — 读取 + 航向计算 
  *        每 6ms 调用一次
  */
 void App_flight_process_mag(void)

@@ -20,7 +20,7 @@
 #define OLED_ROW_3     48
 
 /*============================================================================*/
-/* 任务配置（供 freertos_demo.c 使用）                                           */
+/* 任务配置（供 App_task.c 使用）                                           */
 /*============================================================================*/
 #define APP_OLED_TASK_STACK     128
 #define APP_OLED_TASK_PRIORITY  1
@@ -35,7 +35,7 @@
 void App_OLED_Init(void);
 
 /**
- * @brief  OLED 显示任务 — 由 freertos_demo.c 的 start_task 创建
+ * @brief  OLED 显示任务 — 由 App_task.c 的 start_task 创建
  */
 void App_OLED_Task(void *pvParameters);
 
