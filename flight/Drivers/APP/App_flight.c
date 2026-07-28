@@ -147,8 +147,8 @@ PID_Struct vel_y_pid = {
 };
 
 
-//// 定高飞行的目标高度（单位: m）
-extern volatile float fix_height;
+// 定高飞行的目标高度（单位: m，仅 flight_task 内部使用）
+static float fix_height = 0.0f;
 
 // 上一次飞行状态（用于检测状态进入时刻）
 static Flight_State prev_flight_state = LOCKED;

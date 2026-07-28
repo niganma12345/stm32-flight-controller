@@ -23,8 +23,6 @@ volatile Flight_State flight_state = LOCKED;
 QueueHandle_t remote_data_queue = NULL;
 // 遥控器连接状态（上电信任连接，收不到数据时自动断开）
 volatile Remote_State remote_state = REMOTE_CONNECTED;
-// 定高飞行的目标高度（volatile：多任务读写）
-volatile float fix_height = 0.0f;
 
 
 /**
