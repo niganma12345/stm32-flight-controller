@@ -10,16 +10,13 @@
 #include "App_flight.h"
 #include "App_task.h"
 
-extern QueueHandle_t remote_data_queue;
-extern volatile uint8_t g_shutdown_req;
+/* 电池电压分压比 = (R1+R2)/R2，R1=R2=100k */
+#define VOLTAGE_DIVIDER_RATIO  2.0f
 
-uint8_t rx_buff[NRF24L01_RX_PACKET_WIDTH] = {0};
+extern QueueHandle_t remote_data_queue;
 
 // 飞行状态
 extern volatile Flight_State flight_state;
-
-// 重试次数
-uint8_t retry_count = 0;
 
 /**
  * @brief 接收遥控器发送的遥控数据 => 封装为结构体
@@ -31,6 +28,7 @@ uint8_t retry_count = 0;
  */
 uint8_t App_receive_data(void)
 {
+    uint8_t rx_buff[NRF24L01_RX_PACKET_WIDTH] = {0};
     memset(rx_buff, 0, NRF24L01_RX_PACKET_WIDTH);
 
     // 使用 NRF24L01 接收数据
@@ -93,6 +91,8 @@ uint8_t App_receive_data(void)
  */
 void App_process_connect_state(uint8_t res)
 {
+    static uint8_t retry_count = 0;
+
     if (res == 0)
     {
         xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);
@@ -250,46 +250,44 @@ void App_process_flight_state(void)
 }
 
 /**
- * @brief 读取高度和电池电压，打包并通过 NRF24L01 回传给遥控端
- *
- *        数据包格式: 'a' 'l' 't' + int16高度(cm) + flight_state + int16电压(0.1V) + 填充 → 17字节
- *        调用前需确保 BMP280 已初始化且收到遥控数据。
+ * @brief  遥测回传：高度 + 电池电压 + 飞行状态 + 光流方向
+ *         打包后通过 NRF24L01 发送给遥控端
+ * @note   数据包格式: 'a' 'l' 't' + int16高度(cm) + flight_state + int16电压(0.1V) + 光流标志 + 填充 → 17字节
  */
 void App_send_telemetry(void)
 {
-    // 电压分压比 = (R1+R2)/R2，R1=R2=100k → (200k/100k) = 2.0
-    #define VOLTAGE_DIVIDER_RATIO 2.0f
+    float battery = 0.0f;
+    int16_t alt_cm;
+    uint16_t volt_dmv;
+    uint8_t pkt[NRF24L01_TX_PACKET_WIDTH];
 
-    /* 读取融合高度（Com_height 激光+气压计融合，cm） */
-    float altitude = g_fused_height;
+    memset(pkt, 0, NRF24L01_TX_PACKET_WIDTH);
 
-    /* 读取电池电压：PB1 → ADC1_IN9 */
-    float battery_voltage = 0.0f;
+    // 1. 读取电池电压（PB1 → ADC1_IN9）
     HAL_ADC_Start(&hadc1);
     if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
     {
-        uint16_t adc_val = HAL_ADC_GetValue(&hadc1);
-        battery_voltage = (float)adc_val / 4096.0f * 3.3f * VOLTAGE_DIVIDER_RATIO;
+        uint16_t adc = HAL_ADC_GetValue(&hadc1);
+        battery = (float)adc / 4096.0f * 3.3f * VOLTAGE_DIVIDER_RATIO;
     }
 
-    /* 打包数据包: 帧头'alt' + int16高度(cm) + flight_state + int16电压(0.1V) + 填充 = 17字节 */
-    extern volatile Flight_State flight_state;
-    uint8_t alt_pkt[NRF24L01_TX_PACKET_WIDTH];
-    memset(alt_pkt, 0, NRF24L01_TX_PACKET_WIDTH);
-    alt_pkt[0] = 'a';
-    alt_pkt[1] = 'l';
-    alt_pkt[2] = 't';
-    int16_t alt_cm = (int16_t)(altitude * 100.0f);
-    alt_pkt[3] = (uint8_t)(alt_cm >> 8);
-    alt_pkt[4] = (uint8_t)(alt_cm & 0xFF);
-    alt_pkt[5] = (uint8_t)flight_state;
-    uint16_t volt_dmv = (uint16_t)(battery_voltage * 10.0f);  /* 0.1V单位 */
-    alt_pkt[6] = (uint8_t)(volt_dmv >> 8);
-    alt_pkt[7] = (uint8_t)(volt_dmv & 0xFF);
-    /* 光流方向标志（byte 8-9） */
-    alt_pkt[8] = (g_flow_data.disp.delta_x != 0) ? 1 : 0;  /* 前后有移动 */
-    alt_pkt[9] = (g_flow_data.disp.delta_y != 0) ? 1 : 0;  /* 左右有移动 */
+    // 2. 高度(cm) 和 电压(0.1V) 单位转换
+    alt_cm = (int16_t)(g_fused_height * 100.0f);
+    volt_dmv = (uint16_t)(battery * 10.0f);
 
-    memcpy(NRF24L01_TxPacket, alt_pkt, NRF24L01_TX_PACKET_WIDTH);
-    NRF24L01_Send();  /* 发送完成后自动切回接收模式 */
+    // 3. 打包数据
+    pkt[0] = 'a';
+    pkt[1] = 'l';
+    pkt[2] = 't';
+    pkt[3] = (uint8_t)(alt_cm >> 8);
+    pkt[4] = (uint8_t)(alt_cm & 0xFF);
+    pkt[5] = (uint8_t)flight_state;
+    pkt[6] = (uint8_t)(volt_dmv >> 8);
+    pkt[7] = (uint8_t)(volt_dmv & 0xFF);
+    pkt[8] = (g_flow_data.disp.delta_x != 0) ? 1 : 0;  /* 前后有移动 */
+    pkt[9] = (g_flow_data.disp.delta_y != 0) ? 1 : 0;  /* 左右有移动 */
+
+    // 4. 通过 NRF24L01 发送（发送完成后自动切回接收模式）
+    memcpy(NRF24L01_TxPacket, pkt, NRF24L01_TX_PACKET_WIDTH);
+    NRF24L01_Send();
 }
