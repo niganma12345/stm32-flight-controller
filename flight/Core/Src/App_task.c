@@ -10,16 +10,11 @@
 #include "BlueSerial.h"
 #include "App_oled.h"
 
-extern Euler_struct euler_angle;
-
-
-
 /* 通信超时保护：记录最后一次收到有效数据的时间戳 */
 static volatile TickType_t g_last_rx_tick = 0;
 #define COMM_TIMEOUT_MS  150   /* 超时阈值：150ms 无数据则自动停转 */
 
 #define cycle_time 6
-#define cycle_time1 1000
 #define POWER_TASK_PERIOD 10000
 
 // 飞行状态（volatile：多任务并发读写），上电默认锁定

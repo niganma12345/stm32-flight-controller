@@ -1,5 +1,5 @@
-#ifndef __FREERTOS_DEMO_H
-#define __FREERTOS_DEMO_H
+#ifndef __APP_TASK_H
+#define __APP_TASK_H
 
 void freertos_start(void);
 
