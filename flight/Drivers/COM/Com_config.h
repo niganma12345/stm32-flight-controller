@@ -3,40 +3,51 @@
 
 #include "main.h"
 
-// 飞行状态
+/*============================================================================
+ * COM_CONFIG — 跨模块共享类型定义
+ *
+ * 所有被 COM 层定义、APP/BSP 层使用的结构体/枚举集中在此文件中。
+ * 模块内部专用的类型留在各自的头文件中。
+ *============================================================================*/
+
+/* ---- 飞行状态 ---- */
 typedef enum
 {
-    LOCKED = 0,   // 未解锁（安全锁定）
-    IDLE,         // 已解锁，空闲待命
-    NORMAL,       // 正常飞行模式
-    FIX_HEIGHT,   // 定高飞行模式
-    MANUAL,       // 手动飞行模式（角度自稳，不使用光流）
-    FAIL,         // 故障模式
+    LOCKED = 0,   /* 未解锁（安全锁定） */
+    IDLE,         /* 已解锁，空闲待命 */
+    NORMAL,       /* 正常飞行模式 */
+    FIX_HEIGHT,   /* 定高飞行模式 */
+    MANUAL,       /* 手动飞行模式（角度自稳，不使用光流） */
+    FAIL,         /* 故障模式 */
 } Flight_State;
 
+/* ---- 遥控数据 ---- */
 typedef struct
 {
-    int16_t thr;
-    int16_t yaw;
-    int16_t pit;
-    int16_t rol;
-    uint8_t shutdown;   // 1: 关闭  0: 不关机
-    uint8_t fix_height; // 1. 切换定高和不定高 0: 不切换
+    int16_t thr;        /* 油门 0~1000 */
+    int16_t yaw;        /* 偏航 0~1000，中位 500 */
+    int16_t pit;        /* 俯仰 0~1000，中位 500 */
+    int16_t rol;        /* 横滚 0~1000，中位 500 */
+    uint8_t shutdown;   /* 1: 关机  0: 正常 */
+    uint8_t fix_height; /* 1: 切换定高  0: 不切换 */
 } Remote_Data;
 
-// 陀螺仪数据  16位ADC的值
+/* ---- 传感器原始数据 ---- */
+
+/* 陀螺仪 16 位 ADC 值 */
 typedef struct
 {
-    int16_t gyro_x; // 往右飞为正   表示横滚角
-    int16_t gyro_y; // 向前飞转动为正 表示俯仰角
-    int16_t gyro_z; // 逆时针转动为正  表示偏航角
+    int16_t gyro_x; /* 往右转为正 → 横滚角速度 */
+    int16_t gyro_y; /* 往前转为正 → 俯仰角速度 */
+    int16_t gyro_z; /* 逆时针转为正 → 偏航角速度 */
 } Gyro_struct;
-// 16位ADC的值
+
+/* 加速度计 16 位 ADC 值 */
 typedef struct
 {
-    int16_t accel_x; // 往前为正
-    int16_t accel_y; // 往左为正
-    int16_t accel_z; // 朝上的加速度为正
+    int16_t accel_x; /* 往前为正 */
+    int16_t accel_y; /* 往左为正 */
+    int16_t accel_z; /* 朝上为正 */
 } Accel_struct;
 
 typedef struct
@@ -45,12 +56,67 @@ typedef struct
     Accel_struct accel;
 } Gyro_Accel_Struct;
 
-// 解算得到的欧拉角
+/* ---- 姿态解算结果 ---- */
 typedef struct
 {
     float yaw;
     float pitch;
     float roll;
 } Euler_struct;
+
+/* ---- PID 控制 ---- */
+typedef struct
+{
+    float kp;           /* 比例系数 */
+    float ki;           /* 积分系数 */
+    float kd;           /* 微分系数 */
+    float err;          /* 当前误差 */
+    float desire;       /* 目标值 */
+    float measure;      /* 测量值 */
+    float last_err;     /* 上一次误差 */
+    float integral;     /* 积分累积 */
+    float output;       /* 输出结果 */
+    float integral_max; /* 积分限幅（对称±），0=不限幅 */
+    float output_max;   /* 输出限幅（对称±），0=不限幅 */
+} PID_Struct;
+
+/* ---- 卡尔曼滤波 ---- */
+typedef struct
+{
+    float LastP; /* 上一时刻状态方差 */
+    float Now_P; /* 当前时刻状态方差 */
+    float out;   /* 滤波输出（估计值） */
+    float Kg;    /* 卡尔曼增益 */
+    float Q;     /* 过程噪声方差 */
+    float R;     /* 测量噪声方差 */
+} KalmanFilter_Struct;
+
+/* ---- 光流 ---- */
+
+/* 像素位移（前后/左右） */
+typedef struct
+{
+    int16_t delta_x;
+    int16_t delta_y;
+} Flow_Displacement_t;
+
+/* 物理位移 (mm) */
+typedef struct
+{
+    float x;
+    float y;
+} Flow_RealPos_t;
+
+/* 光流完整数据 */
+typedef struct
+{
+    Flow_Displacement_t disp;
+    Flow_RealPos_t      pos;
+    float               vx;         /* 前后速度 (mm/s) */
+    float               vy;         /* 左右速度 (mm/s) */
+    uint8_t             squal;      /* 表面质量 */
+    uint8_t             is_motion;  /* 检测到移动 */
+    uint8_t             is_valid;   /* 数据有效 */
+} Flow_Data_t;
 
 #endif // !_COM_CONFIG_H
