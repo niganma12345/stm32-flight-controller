@@ -33,31 +33,8 @@
 #define FLOW_CORR_LPF_ALPHA    0.01f
 
 /* ============================================================================
- * 数据结构
+ * 数据结构（类型定义见 Com_config.h)
  * ============================================================================ */
-
-typedef struct
-{
-    int16_t delta_x;    /* 飞机前后像素位移 */
-    int16_t delta_y;    /* 飞机左右像素位移 */
-} Flow_Displacement_t;
-
-typedef struct
-{
-    float x;            /* 飞机前后物理位移 (mm) */
-    float y;            /* 飞机左右物理位移 (mm) */
-} Flow_RealPos_t;
-
-typedef struct
-{
-    Flow_Displacement_t disp;
-    Flow_RealPos_t      pos;
-    float               vx;         /* 前后速度 (mm/s) */
-    float               vy;         /* 左右速度 (mm/s) */
-    uint8_t             squal;
-    uint8_t             is_motion;
-    uint8_t             is_valid;
-} Flow_Data_t;
 
 /* ============================================================================
  * API

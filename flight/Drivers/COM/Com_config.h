@@ -64,33 +64,6 @@ typedef struct
     float roll;
 } Euler_struct;
 
-/* ---- PID 控制 ---- */
-typedef struct
-{
-    float kp;           /* 比例系数 */
-    float ki;           /* 积分系数 */
-    float kd;           /* 微分系数 */
-    float err;          /* 当前误差 */
-    float desire;       /* 目标值 */
-    float measure;      /* 测量值 */
-    float last_err;     /* 上一次误差 */
-    float integral;     /* 积分累积 */
-    float output;       /* 输出结果 */
-    float integral_max; /* 积分限幅（对称±），0=不限幅 */
-    float output_max;   /* 输出限幅（对称±），0=不限幅 */
-} PID_Struct;
-
-/* ---- 卡尔曼滤波 ---- */
-typedef struct
-{
-    float LastP; /* 上一时刻状态方差 */
-    float Now_P; /* 当前时刻状态方差 */
-    float out;   /* 滤波输出（估计值） */
-    float Kg;    /* 卡尔曼增益 */
-    float Q;     /* 过程噪声方差 */
-    float R;     /* 测量噪声方差 */
-} KalmanFilter_Struct;
-
 /* ---- 光流 ---- */
 
 /* 像素位移（前后/左右） */
