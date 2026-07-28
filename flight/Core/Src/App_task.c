@@ -25,12 +25,6 @@ volatile Remote_Data remote_data = {.thr = 0, .yaw = 500, .pit = 500, .rol = 500
 volatile Remote_State remote_state = REMOTE_CONNECTED;
 // 定高飞行的目标高度（volatile：多任务读写）
 volatile float fix_height = 0.0f;
-// SPA06 测量的当前海拔高度（单位: m）
-volatile float g_spa06_altitude = 0.0f;
-// 电池电压（单位: V），PB1 ADC读取
-volatile float g_battery_voltage = 0.0f;
-// 通信接收结果（供电源管理任务使用），0=收到数据，非0=未收到
-volatile uint8_t g_rx_result = 1;
 
 
 /**
@@ -211,10 +205,10 @@ void nrf24l01_task(void *pvParameters)
     while (1)
     {
         /* ---- 接收遥控数据、校验、应答（由 App_receive_data 模块完成） ---- */
-        g_rx_result = App_receive_data();
+        uint8_t rx_result = App_receive_data();
 
         /* ---- 处理遥控器连接状态 ---- */
-        App_process_connect_state(g_rx_result);
+        App_process_connect_state(rx_result);
 
         /* ---- 处理飞行状态机（解锁/定高/故障） ---- */
         App_process_flight_state();
@@ -228,7 +222,7 @@ void nrf24l01_task(void *pvParameters)
 
 
         /* 接收成功时更新最后收包时间戳 */
-        if (g_rx_result == 0)
+        if (rx_result == 0)
         {
             g_last_rx_tick = xTaskGetTickCount();
 

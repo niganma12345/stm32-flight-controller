@@ -252,16 +252,15 @@ void App_send_telemetry(void)
     #define VOLTAGE_DIVIDER_RATIO 2.0f
 
     /* 读取融合高度（Com_height 激光+气压计融合，cm） */
-    extern volatile float g_spa06_altitude;
-    g_spa06_altitude = g_fused_height;
+    float altitude = g_fused_height;
 
     /* 读取电池电压：PB1 → ADC1_IN9 */
-    extern volatile float g_battery_voltage;
+    float battery_voltage = 0.0f;
     HAL_ADC_Start(&hadc1);
     if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
     {
         uint16_t adc_val = HAL_ADC_GetValue(&hadc1);
-        g_battery_voltage = (float)adc_val / 4096.0f * 3.3f * VOLTAGE_DIVIDER_RATIO;
+        battery_voltage = (float)adc_val / 4096.0f * 3.3f * VOLTAGE_DIVIDER_RATIO;
     }
 
     /* 打包数据包: 帧头'alt' + int16高度(cm) + flight_state + int16电压(0.1V) + 填充 = 17字节 */
@@ -271,11 +270,11 @@ void App_send_telemetry(void)
     alt_pkt[0] = 'a';
     alt_pkt[1] = 'l';
     alt_pkt[2] = 't';
-    int16_t alt_cm = (int16_t)(g_spa06_altitude * 100.0f);
+    int16_t alt_cm = (int16_t)(altitude * 100.0f);
     alt_pkt[3] = (uint8_t)(alt_cm >> 8);
     alt_pkt[4] = (uint8_t)(alt_cm & 0xFF);
     alt_pkt[5] = (uint8_t)flight_state;
-    uint16_t volt_dmv = (uint16_t)(g_battery_voltage * 10.0f);  /* 0.1V单位 */
+    uint16_t volt_dmv = (uint16_t)(battery_voltage * 10.0f);  /* 0.1V单位 */
     alt_pkt[6] = (uint8_t)(volt_dmv >> 8);
     alt_pkt[7] = (uint8_t)(volt_dmv & 0xFF);
     /* 光流方向标志（byte 8-9） */
