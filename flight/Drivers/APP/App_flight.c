@@ -533,6 +533,19 @@ void App_flight_display(void)
     if (++tick < 17) return;
     tick = 0;
 
+    /* ---- 加速度计偏移未配置 → 显示原始采集数据（填入宏后重新编译即消失）---- */
+#if (ACCEL_OFFSET_X == 0 && ACCEL_OFFSET_Y == 0 && ACCEL_OFFSET_Z == 0)
+    {
+        App_OLED_Postf(0, OLED_ROW_0, OLED_8X16, "ACC Raw Data");
+        App_OLED_Postf(0, OLED_ROW_1, OLED_6X8, "Place LEVEL->record");
+        App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
+            "X:%d Y:%d", (int)g_accel_raw_x, (int)g_accel_raw_y);
+        App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
+            "Z:%d oZ:%d", (int)g_accel_raw_z, (int)(g_accel_raw_z - 16384));
+        return;
+    }
+#endif
+
     /* ---- 磁力计未校准 → 只显示校准界面，不显示其他数据 ---- */
     if (QMC_HARD_OFS_X == 0 && QMC_HARD_OFS_Y == 0)
     {

@@ -1,12 +1,17 @@
 #include "mpu6050.h"
 
-/* ---- 零偏校准值（Init 自动采样）---- */
+/* ---- 零偏校准值 ---- */
 int32_t acc_x_offset  = 0;
 int32_t acc_y_offset  = 0;
 int32_t acc_z_offset  = 0;
-int32_t gyro_x_offset = 0;
+int32_t gyro_x_offset = 0;  /* 陀螺仪：Init 自动采样 */
 int32_t gyro_y_offset = 0;
 int32_t gyro_z_offset = 0;
+
+/* 加速度原始采集结果（偏移全为 0 时 Init 自动填充，供 OLED 显示） */
+int32_t g_accel_raw_x = 0;
+int32_t g_accel_raw_y = 0;
+int32_t g_accel_raw_z = 0;
 
 void Int_MPU6050_Write_Reg(uint8_t reg, uint8_t data)
 {
@@ -19,10 +24,12 @@ void Int_MPU6050_Read_Reg(uint8_t reg, uint8_t *data)
 }
 
 /**
- * @brief 零偏校准
+ * @brief 零偏校准（Init 末尾自动调用）
  *
- * 等飞机静止 → 采样100次平均 → 填入6轴偏移量。
- * Init 末尾自动调用，无需外部介入。
+ * 陀螺仪：静止 → 采样100次平均 → 填入零偏。
+ * 加速度计：优先使用硬编码宏 ACCEL_OFFSET_X/Y/Z。
+ *          宏全为 0 时进入采集模式：保存原始 ADC 均值到 g_accel_raw_*，
+ *          供 OLED 显示，用户填入宏后重新编译。
  */
 static void Int_MPU6050_calculate_offset(void)
 {
@@ -52,21 +59,38 @@ static void Int_MPU6050_calculate_offset(void)
     for (uint8_t i = 0; i < 100; i++)
     {
         Int_MPU6050_Get_Data(&raw);
-        acc_x_sum += (raw.accel.accel_x - 0);
-        acc_y_sum += (raw.accel.accel_y - 0);
-        acc_z_sum += (raw.accel.accel_z - 16384);
-        gx_sum    += (raw.gyro.gyro_x - 0);
-        gy_sum    += (raw.gyro.gyro_y - 0);
-        gz_sum    += (raw.gyro.gyro_z - 0);
+        acc_x_sum += raw.accel.accel_x;   /* 原始值，不预设方向 */
+        acc_y_sum += raw.accel.accel_y;
+        acc_z_sum += raw.accel.accel_z;
+        gx_sum    += raw.gyro.gyro_x;
+        gy_sum    += raw.gyro.gyro_y;
+        gz_sum    += raw.gyro.gyro_z;
         HAL_Delay(6);
     }
 
-    acc_x_offset  = acc_x_sum / 100;
-    acc_y_offset  = acc_y_sum / 100;
-    acc_z_offset  = acc_z_sum / 100;
+    /* 陀螺仪零偏（始终自动校准，仅需静止不要求水平） */
     gyro_x_offset = gx_sum / 100;
     gyro_y_offset = gy_sum / 100;
     gyro_z_offset = gz_sum / 100;
+
+    /* 加速度计偏移：优先硬编码宏，全为 0 时进入采集模式 */
+    if (ACCEL_OFFSET_X == 0 && ACCEL_OFFSET_Y == 0 && ACCEL_OFFSET_Z == 0)
+    {
+        /* 采集模式：保存原始均值供 OLED 显示，偏移量暂为 0 */
+        g_accel_raw_x = acc_x_sum / 100;
+        g_accel_raw_y = acc_y_sum / 100;
+        g_accel_raw_z = acc_z_sum / 100;
+        acc_x_offset = 0;
+        acc_y_offset = 0;
+        acc_z_offset = 0;
+    }
+    else
+    {
+        /* 已配置：直接使用硬编码值 */
+        acc_x_offset = ACCEL_OFFSET_X;
+        acc_y_offset = ACCEL_OFFSET_Y;
+        acc_z_offset = ACCEL_OFFSET_Z;
+    }
 }
 
 void Int_MPU6050_Init(void)

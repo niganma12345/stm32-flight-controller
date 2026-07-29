@@ -105,4 +105,31 @@ void Int_MPU6050_Get_Acc(Accel_struct *acc);
  */
 void Int_MPU6050_Get_Data(Gyro_Accel_Struct *data);
 
+/*============================================================================*/
+/* 加速度计零偏（硬编码）                                                        */
+/*============================================================================*/
+/*
+ * 采集方法：
+ *   1. 飞机放在水平面上
+ *   2. 开机，OLED 会显示原始加速度 ADC 值
+ *   3. 记下 X / Y / Z 原始值，填入下方三个宏
+ *   4. 重新编译烧录
+ *
+ * 计算公式：
+ *   ACCEL_OFFSET_X = 水平面 X 轴原始 ADC 平均值
+ *   ACCEL_OFFSET_Y = 水平面 Y 轴原始 ADC 平均值
+ *   ACCEL_OFFSET_Z = 水平面 Z 轴原始 ADC 平均值 - 16384
+ *
+ * 例：水平面读到 X=120, Y=-80, Z=16500
+ *     则 ACCEL_OFFSET_X=120, ACCEL_OFFSET_Y=-80, ACCEL_OFFSET_Z=16500-16384=116
+ */
+#define ACCEL_OFFSET_X  0   /* 水平面 X 轴原始 ADC 平均值 */
+#define ACCEL_OFFSET_Y  0   /* 水平面 Y 轴原始 ADC 平均值 */
+#define ACCEL_OFFSET_Z  0   /* 水平面 Z 轴原始 ADC 平均值 - 16384 */
+
+/* 采集模式：偏移全为 0 时 Init 自动采样到以下变量（供 OLED 显示） */
+extern int32_t g_accel_raw_x;
+extern int32_t g_accel_raw_y;
+extern int32_t g_accel_raw_z;
+
 #endif // __INT_MPU6050__
