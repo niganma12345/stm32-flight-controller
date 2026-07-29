@@ -66,9 +66,9 @@ PID_Struct gyro_x_pid = {
 
 // 偏航PID结构体
 PID_Struct yaw_pid = {
-    .kp = -1.00f,      
-    .ki = -0.02f,
-    .kd = -0.2f,
+    .kp = -5.0f,      
+    .ki = -0.00f,
+    .kd = -0.15f,
     .integral_max = 30.0f,   
     .output_max   = 100.0f,  
 };
@@ -130,16 +130,16 @@ static float g_hover_thr = 0.0f;
  * output_max: 速度环输出的最大倾角修正量（°），防止异常时翻车
  */
 PID_Struct vel_x_pid = {
-    .kp = 6.0f,         /* °/(mm/s): 50mm/s → 100° */
-    .ki = 0.1f,         /* 快速消除稳态漂移 */
+    .kp = -6.0f,         /* °/(mm/s): 50mm/s → 100° */
+    .ki = -0.1f,         /* 快速消除稳态漂移 */
     .kd = 0.0f,
     .integral_max = 5.0f,
     .output_max   = 15.0f,  /* 最大修正 ±15° */
 };
 
 PID_Struct vel_y_pid = {
-    .kp = 6.0f,
-    .ki = 0.1f,
+    .kp = -6.0f,
+    .ki = -0.1f,
     .kd = 0.0f,
     .integral_max = 5.0f,
     .output_max   = 15.0f,
