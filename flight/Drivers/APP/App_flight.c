@@ -7,6 +7,7 @@
 #include "Int_VL53L1X.h"
 #include "QMC5883P.h"
 #include "App_oled.h"
+#include <math.h>
 
 
 
@@ -64,13 +65,21 @@ PID_Struct gyro_x_pid = {
 };
 
 
-// 偏航PID结构体
+// 偏航角度PID（外环）→ 输出角速率目标 (°/s)
 PID_Struct yaw_pid = {
-    .kp = -5.0f,      
-    .ki = -0.00f,
-    .kd = -0.15f,
-    .integral_max = 30.0f,   
-    .output_max   = 100.0f,  
+    .kp = -0.0f,           
+    .ki = -0.0f,         
+    .kd =  0.0f,
+    .integral_max = 50.0f,   
+    .output_max   = 100.0f,   /* 最大目标角速率 ±100°/s */
+};
+// Z轴角速度结构体（内环）→ 陀螺仪Z轴，不受电机磁场干扰
+PID_Struct gyro_z_pid = {
+    .kp =  3.50f,          /* 先测方向：目标=0纯阻尼 */
+    .ki =  0.00f,
+    .kd =  0.00f,          /* 先去D，避免噪声混淆 */
+    .integral_max = 50.0f,
+    .output_max   = 100.0f,
 };
 
 /*============================================================================*/
@@ -130,17 +139,17 @@ static float g_hover_thr = 0.0f;
  * output_max: 速度环输出的最大倾角修正量（°），防止异常时翻车
  */
 PID_Struct vel_x_pid = {
-    .kp = -6.0f,         /* °/(mm/s): 50mm/s → 100° */
-    .ki = -0.1f,         /* 快速消除稳态漂移 */
-    .kd = 0.0f,
+    .kp = -0.02f,         /* °/(mm/s): 50mm/s → 100° */
+    .ki = -0.00f,         /* 快速消除稳态漂移 */
+    .kd = 0.01f,
     .integral_max = 5.0f,
     .output_max   = 15.0f,  /* 最大修正 ±15° */
 };
 
 PID_Struct vel_y_pid = {
-    .kp = -6.0f,
-    .ki = -0.1f,
-    .kd = 0.0f,
+    .kp = -0.02f,
+    .ki = -0.00f,
+    .kd = 0.01f,
     .integral_max = 5.0f,
     .output_max   = 15.0f,
 };
@@ -311,7 +320,13 @@ void App_flight_pid_process(const Remote_Data *rc)
         /* 解锁瞬间 (LOCKED→活跃) 捕获当前航向 */
         Flight_State cur = (Flight_State)flight_state;
         if (prev_yaw_state == LOCKED && cur != LOCKED)
-            yaw_target = euler_angle.yaw;
+        {
+            yaw_target = roundf(euler_angle.yaw);
+            /* 复位内环PID状态，避免上次飞行残留 */
+            gyro_z_pid.integral = 0.0f;
+            gyro_z_pid.last_err = 0.0f;
+            gyro_z_pid.output   = 0.0f;
+        }
         prev_yaw_state = cur;
 
         if (fabsf(yaw_stick) >= 1.0f)
@@ -328,9 +343,16 @@ void App_flight_pid_process(const Remote_Data *rc)
         float err = yaw_pid.desire - yaw_pid.measure;
         if      (err >  180.0f) err -= 360.0f;
         else if (err < -180.0f) err += 360.0f;
+
+        /* 死区 ±1°：忽略磁力计微小波动，但不影响积分修正 */
+        if (fabsf(err) < 1.0f)
+            err = 0.0f;
+
         yaw_pid.desire = yaw_pid.measure + err;
 
-        Com_PID_Calc(&yaw_pid);
+        /* 串级PID：角度外环 → 角速率内环 */
+        gyro_z_pid.measure = (gyro_accel_data.gyro.gyro_z * 2000.0f / 32768.0f);
+        Com_PID_Calc_Chain(&yaw_pid, &gyro_z_pid);
     }
 }
 
@@ -354,20 +376,20 @@ void App_flight_control_motor(const Remote_Data *rc)
     case NORMAL:
     case MANUAL:
         // 自稳模式 — 对角线电机配对：左前+右后(gyro_z同号) vs 左后+右前(-gyro_z)
-        left_top_motor.speed = rc->thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
-        left_bottom_motor.speed = rc->thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
-        right_top_motor.speed = rc->thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100);
-        right_bottom_motor.speed = rc->thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100);
+        left_top_motor.speed = rc->thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100);
+        left_bottom_motor.speed = rc->thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100);
+        right_top_motor.speed = rc->thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100);
+        right_bottom_motor.speed = rc->thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100);
         break;
     case FIX_HEIGHT:
         // 定高模式 → 悬停油门基准 + 自稳 + 串级高度PID修正
         {
             int16_t base_thr = (int16_t)g_hover_thr;
             int16_t h_corr   = (int16_t)height_vel_pid.output;
-            left_top_motor.speed     = base_thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100) + h_corr;
-            left_bottom_motor.speed  = base_thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100) + h_corr;
-            right_top_motor.speed    = base_thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(yaw_pid.output, 100, -100) + h_corr;
-            right_bottom_motor.speed = base_thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(yaw_pid.output, 100, -100) + h_corr;
+            left_top_motor.speed     = base_thr + gyro_y_pid.output - gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
+            left_bottom_motor.speed  = base_thr - gyro_y_pid.output - gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
+            right_top_motor.speed    = base_thr + gyro_y_pid.output + gyro_x_pid.output - Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
+            right_bottom_motor.speed = base_thr - gyro_y_pid.output + gyro_x_pid.output + Com_limit(gyro_z_pid.output, 100, -100) + h_corr;
         }
         break;
     case FAIL:

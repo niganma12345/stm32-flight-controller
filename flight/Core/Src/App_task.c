@@ -266,24 +266,24 @@ void nrf24l01_task(void *pvParameters)
         }
 
 
-//        /* ---- 每 ~102ms 蓝牙输出：高度 + 光流真实位移（使用 flight_task 已处理的数据）---- */
-//        {
-//            static uint8_t  blue_tick = 0;
-//            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
-//            {
-//                blue_tick = 0;
-//                  /*江协蓝牙串口*/
-//                BlueSerial_Printf("[plot,%d,%d,%d]",
-//                                  g_flow_height_mm,
-//                                  (int)g_flow_data.vx,
-//                                  (int)g_flow_data.vy);
+        /* ---- 每 ~102ms 蓝牙输出：高度 + 光流真实位移（使用 flight_task 已处理的数据）---- */
+        {
+            static uint8_t  blue_tick = 0;
+            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
+            {
+                blue_tick = 0;
+                  /*江协蓝牙串口*/
+                BlueSerial_Printf("[plot,%d,%d,%d]",
+                                  g_flow_height_mm,
+                                  (int)g_flow_data.vx,
+                                  (int)g_flow_data.vy);
 //				          /*vofa+蓝牙*/
 //							  BlueSerial_Printf(":%d,%d,%d\n",
 //                                  g_flow_height_mm,
 //                                  (int)g_flow_data.vx,
 //                                  (int)g_flow_data.vy);
-//            }
-//        }
+            }
+        }
 
         vTaskDelay(6);
 

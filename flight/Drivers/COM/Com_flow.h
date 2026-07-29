@@ -15,22 +15,22 @@
 #define FLOW_SCALE_FACTOR   0.021f
 
 /* 旋转补偿：每像素对应张角 (°) */
-#define FLOW_DEG_PER_PIXEL  0.1f
+#define FLOW_DEG_PER_PIXEL  0.009f
 
 /* 表面质量最低阈值 */
-#define FLOW_SQUAL_MIN      90
+#define FLOW_SQUAL_MIN      70
 
 /* 位移滑动平均窗口 */
 #define FLOW_DISP_MA_WINDOW    4
 
 /* 速度滤波与死区 */
-#define FLOW_VEL_LPF_ALPHA     0.1f
+#define FLOW_VEL_LPF_ALPHA     0.15f
 #define FLOW_PIXEL_DEADBAND    2
-#define FLOW_POS_DEADBAND_MM   100.0f
-#define FLOW_VEL_DEADBAND      100.0f
+#define FLOW_POS_DEADBAND_MM   50.0f
+#define FLOW_VEL_DEADBAND      50.0f
 
 /* 光流修正量低通 */
-#define FLOW_CORR_LPF_ALPHA    0.01f
+#define FLOW_CORR_LPF_ALPHA    0.015f
 
 /* ============================================================================
  * 数据结构（类型定义见 Com_config.h)
