@@ -10,6 +10,7 @@
 #define EVT_REMOTE_CONNECTED  (1 << 0)   /* 遥控器已连接 */
 
 extern QueueHandle_t      remote_data_queue;   /* 遥控数据队列，深度1 */
+extern QueueHandle_t      telemetry_queue;     /* 遥测数据队列，深度1 */
 extern EventGroupHandle_t flight_evt_group;    /* 飞行事件组 */
 
 void freertos_start(void);

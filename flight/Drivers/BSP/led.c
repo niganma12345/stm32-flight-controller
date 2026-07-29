@@ -38,7 +38,7 @@ void Led_Init(void)
 void Led_Process(void)
 {
     /* ---- LED0：通讯状态 ---- */
-    if (xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED)
+    if (xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED)  /* 读事件组 */
     {
         led0_off_cnt = 0;
         HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);  /* 亮（低电平） */

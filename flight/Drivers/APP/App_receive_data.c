@@ -4,13 +4,11 @@
 #include "queue.h"
 #include "event_groups.h"
 #include <string.h>
-#include "spa06.h"
-#include "Com_height.h"
 #include "adc.h"
-#include "App_flight.h"
 #include "App_task.h"
 
-/* 电池电压分压比 = (R1+R2)/R2，R1=R2=100k */
+/* 电池：1S 锂电池，满电 4.2V，分压比 = (R1+R2)/R2 = 200k/100k */
+#define BATTERY_MAX_V          4.2f
 #define VOLTAGE_DIVIDER_RATIO  2.0f
 
 extern QueueHandle_t remote_data_queue;
@@ -79,7 +77,7 @@ uint8_t App_receive_data(void)
     new_data.shutdown  = rx_buff[11];
     new_data.fix_height = rx_buff[12];
 
-    xQueueOverwrite(remote_data_queue, &new_data);
+    xQueueOverwrite(remote_data_queue, &new_data);  /* 写队列 */
 
     return 0;
 }
@@ -95,7 +93,7 @@ void App_process_connect_state(uint8_t res)
 
     if (res == 0)
     {
-        xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);
+        xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);  /* 写事件组 */
         retry_count = 0;
     }
     else if (res == 1)
@@ -103,7 +101,7 @@ void App_process_connect_state(uint8_t res)
         retry_count++;
         if (retry_count >= MAX_RETRY_TIMES)
         {
-            xEventGroupClearBits(flight_evt_group, EVT_REMOTE_CONNECTED);
+            xEventGroupClearBits(flight_evt_group, EVT_REMOTE_CONNECTED);  /* 写事件组 */
             retry_count = 0;
         }
     }
@@ -124,14 +122,14 @@ void App_process_flight_state(void)
 
     /* 从队列读取当前遥控数据快照（本任务同时是写方，每次修改后覆盖写回） */
     Remote_Data rd;
-    if (xQueuePeek(remote_data_queue, &rd, 0) != pdTRUE)
+    if (xQueuePeek(remote_data_queue, &rd, 0) != pdTRUE)  /* 读队列 */
         return;  /* 队列为空，尚无数据 */
 
     switch (flight_state)
     {
     case LOCKED:
         // 只有在遥控已连接时才处理解锁逻辑，避免遥控断联时用旧数据误判
-        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))  /* 读事件组 */
         {
             break;
         }
@@ -181,7 +179,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断是否故障失联
-        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))  /* 读事件组 */
         {
             flight_state = FAIL;
         }
@@ -204,7 +202,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断故障
-        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))  /* 读事件组 */
         {
             flight_state = FAIL;
         }
@@ -227,7 +225,7 @@ void App_process_flight_state(void)
             rd.fix_height = 0;
         }
         // 判断故障
-        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))
+        if (!(xEventGroupGetBits(flight_evt_group) & EVT_REMOTE_CONNECTED))  /* 读事件组 */
         {
             flight_state = FAIL;
         }
@@ -246,48 +244,54 @@ void App_process_flight_state(void)
     }
 
     /* 将修改后的数据写回队列（shutdown/fix_height 可能已被清零） */
-    xQueueOverwrite(remote_data_queue, &rd);
+    xQueueOverwrite(remote_data_queue, &rd);  /* 写 */
 }
 
 /**
- * @brief  遥测回传：高度 + 电池电压 + 飞行状态 + 光流方向
- *         打包后通过 NRF24L01 发送给遥控端
- * @note   数据包格式: 'a' 'l' 't' + int16高度(cm) + flight_state + int16电压(0.1V) + 光流标志 + 填充 → 17字节
+ * @brief  遥测回传：读遥测队列 + 电池电压 → 打包 → 发送
+ * @return uint8_t 0:发送成功  1:队列无数据
  */
-void App_send_telemetry(void)
+uint8_t App_send_telemetry(void)
 {
-    float battery = 0.0f;
+    Telemetry_t tel;
+    uint8_t pkt[NRF24L01_TX_PACKET_WIDTH];
+    float battery;
     int16_t alt_cm;
     uint16_t volt_dmv;
-    uint8_t pkt[NRF24L01_TX_PACKET_WIDTH];
+
+    /* 队列无遥测数据则跳过 */
+    if (xQueuePeek(telemetry_queue, &tel, 0) != pdTRUE)  /* 读队列 */
+        return 1;
 
     memset(pkt, 0, NRF24L01_TX_PACKET_WIDTH);
 
     // 1. 读取电池电压（PB1 → ADC1_IN9）
+    battery = 0.0f;
     HAL_ADC_Start(&hadc1);
-    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
-    {
+    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK) {
         uint16_t adc = HAL_ADC_GetValue(&hadc1);
         battery = (float)adc / 4096.0f * 3.3f * VOLTAGE_DIVIDER_RATIO;
     }
 
-    // 2. 高度(cm) 和 电压(0.1V) 单位转换
-    alt_cm = (int16_t)(g_fused_height * 100.0f);
+    // 2. 单位转换
+    alt_cm   = (int16_t)(tel.altitude * 100.0f);
     volt_dmv = (uint16_t)(battery * 10.0f);
 
-    // 3. 打包数据
-    pkt[0] = 'a';
-    pkt[1] = 'l';
-    pkt[2] = 't';
+    // 3. 打包（帧头 + int16高度 + flight_state + int16电压 + 光流 + 填充）
+    pkt[0] = FRAME_HEAD_TELE_1;
+    pkt[1] = FRAME_HEAD_TELE_2;
+    pkt[2] = FRAME_HEAD_TELE_3;
     pkt[3] = (uint8_t)(alt_cm >> 8);
     pkt[4] = (uint8_t)(alt_cm & 0xFF);
-    pkt[5] = (uint8_t)flight_state;
+    pkt[5] = tel.flight_state;
     pkt[6] = (uint8_t)(volt_dmv >> 8);
     pkt[7] = (uint8_t)(volt_dmv & 0xFF);
-    pkt[8] = (g_flow_data.disp.delta_x != 0) ? 1 : 0;  /* 前后有移动 */
-    pkt[9] = (g_flow_data.disp.delta_y != 0) ? 1 : 0;  /* 左右有移动 */
+    pkt[8] = tel.flow_x;
+    pkt[9] = tel.flow_y;
 
-    // 4. 通过 NRF24L01 发送（发送完成后自动切回接收模式）
+    // 4. 发送（发送完成后自动切回接收模式）
     memcpy(NRF24L01_TxPacket, pkt, NRF24L01_TX_PACKET_WIDTH);
     NRF24L01_Send();
+
+    return 0;
 }

@@ -10,7 +10,7 @@
 
 
 
-uint8_t g_spa06_ok = 1;        /* SPA06 气压计是否可用 1不可用 SPA06_Init后复制为0可用 */
+uint8_t g_spa06_ok = 1;                /* SPA06 气压计是否可用 1不可用 SPA06_Init后赋值为0*/
 uint16_t   g_flow_height_mm = 0;       /*融合高度*/
 uint16_t   g_disp_laser_mm  = 0;       /* 激光原始值，供 OLED 显示 */
 
@@ -19,11 +19,10 @@ Flow_Data_t g_flow_data = {0};          /*光流数据*/
 Euler_struct euler_angle = {0};
 Gyro_struct last_gyro = {0};
 
-
 /* ---- QMC5883P 磁力计 ---- */
-
 extern volatile Flight_State flight_state;
 extern TaskHandle_t nrf24l01_task_handle;
+
 // 电机结构体
 Motor left_top_motor = {.tim = &htim3, .channel = TIM_CHANNEL_1, .speed = 0};
 Motor left_bottom_motor = {.tim = &htim4, .channel = TIM_CHANNEL_4, .speed = 0};
@@ -67,9 +66,9 @@ PID_Struct gyro_x_pid = {
 
 // 偏航PID结构体
 PID_Struct yaw_pid = {
-    .kp = -4.00f,       /* 负值: 磁力计heading与CCW方向反号, 翻转保证负反馈 */
-    .ki = 0.01f,
-    .kd = 0.05f,
+    .kp = 2.00f,      
+    .ki = 0.0f,
+    .kd = 0.00f,
     .integral_max = 30.0f,   /* 直接混控，积分上限适度放宽 */
     .output_max   = 100.0f,  /* 直接混控，与 Com_limit(100,-100) 一致 */
 };
@@ -302,7 +301,7 @@ void App_flight_pid_process(const Remote_Data *rc)
     Com_PID_Calc_Chain(&roll_pid, &gyro_x_pid);
 
     // ==================================================
-    //  偏航角（磁力计硬编码偏移，始终可用）
+    //  偏航角
     // ==================================================
     {
         float yaw_stick = (rc->yaw - 500) / 50.0f;
@@ -524,9 +523,9 @@ void App_flight_process_flow_sensors(void)
 
 /**
  * @brief 统一 OLED 显示刷新
- *
+ * 磁力计校准界面&&数据显示
  * ROW_0: 姿态 P/R   ROW_1: 高度 B/L/F
- * ROW_2: 校准界面 / 光流速度   ROW_3: 校准界面 / 航向
+ * ROW_2: 光流速度 +表面质量  ROW_3: Y融合航向 / M磁力计原始航向
  */
 void App_flight_display(void)
 {
@@ -550,6 +549,7 @@ void App_flight_display(void)
         return;
     }
 
+		
     /* ---- ROW_0: 姿态 ---- */
     App_OLED_Postf(0, OLED_ROW_0, OLED_8X16,
         "P:%.1f R:%.1f", euler_angle.pitch, euler_angle.roll);
@@ -561,12 +561,13 @@ void App_flight_display(void)
         (int)(g_disp_laser_mm / 10),
         (int)(g_fused_height * 100.0f));
 
-    /* ---- ROW_2+3: 光流速度 + 航向 ---- */
+    /* ---- ROW_2: 光流速度 +表面质量 ---- */
     App_OLED_Postf(0, OLED_ROW_2, OLED_6X8,
         "X:%5d Y:%5d S:%3d",
         (int)g_flow_data.vx,
         (int)g_flow_data.vy,
         g_flow_data.squal);
+		/* ---- ROW_3: Y融合航向 / M磁力计原始航向 ---- */				
     App_OLED_Postf(0, OLED_ROW_3, OLED_6X8,
         "Y:%4.0f M:%4.0f", euler_angle.yaw, qmc.heading);
 }

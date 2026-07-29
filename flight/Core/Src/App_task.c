@@ -11,15 +11,14 @@
 #include "App_oled.h"
 
 
-/* 通信超时保护：记录最后一次收到有效数据的时间戳 */
-static volatile TickType_t g_last_rx_tick = 0;
-#define COMM_TIMEOUT_MS  150   /* 超时阈值：150ms 无数据则自动停转 */
 
+static volatile TickType_t g_last_rx_tick = 0;  /* 通信超时保护：记录最后一次收到有效数据的时间戳 */
+#define COMM_TIMEOUT_MS     150    /* 超时阈值：150ms 无数据则自动停转 */
 #define CYCLE_TIME          6      /* 飞控 / 通讯 / LED 主循环周期 (ms) */
 #define POWER_TASK_PERIOD   10000  /* 电源管理任务周期 (ms) */
-
 volatile Flight_State flight_state = LOCKED;           /* 飞行状态（32位原子读写） */
 QueueHandle_t       remote_data_queue = NULL;          /* 遥控数据队列（深度1） */
+QueueHandle_t       telemetry_queue = NULL;            /* 遥测数据队列（深度1） */
 EventGroupHandle_t  flight_evt_group = NULL;           /* 飞行事件组 */
 
 
@@ -91,9 +90,12 @@ void start_task(void *pvParameters)
     /* 创建遥控数据队列（深度1，永远只保留最新值） */
     remote_data_queue = xQueueCreate(1, sizeof(Remote_Data));
 
+    /* 创建遥测数据队列（深度1） */
+    telemetry_queue = xQueueCreate(1, sizeof(Telemetry_t));
+
     /* 创建飞行事件组（初始 CONNECTED 已置位） */
     flight_evt_group = xEventGroupCreate();
-    xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);
+    xEventGroupSetBits(flight_evt_group, EVT_REMOTE_CONNECTED);  /* 初始化事件组 */
 
     xTaskCreate((TaskFunction_t)flight_task,
                 (char *)"flight_task",
@@ -155,7 +157,7 @@ void flight_task(void *pvParameters)
 
         /* ---- 从队列读取遥控数据快照（本周期内所有函数共用一份）---- */
         Remote_Data rc;
-        if (xQueuePeek(remote_data_queue, &rc, 0) != pdTRUE)
+        if (xQueuePeek(remote_data_queue, &rc, 0) != pdTRUE)  /* 读队列 */
         {
             /* 队列为空（尚未收到任何遥控数据），使用安全默认值 */
             rc.thr = 0;
@@ -194,6 +196,21 @@ void flight_task(void *pvParameters)
         // 7. OLED 显示
         App_flight_display();
 
+        // 8. 遥测数据打包 → 队列（每 100ms，供 nrf24l01_task 回传）
+        {
+            static uint8_t tel_tick = 0;
+            if (++tel_tick >= 17)
+            {
+                tel_tick = 0;
+                Telemetry_t tel;
+                tel.altitude     = g_fused_height;
+                tel.flight_state = (uint8_t)flight_state;
+                tel.flow_x       = (g_flow_data.disp.delta_x != 0);
+                tel.flow_y       = (g_flow_data.disp.delta_y != 0);
+                xQueueOverwrite(telemetry_queue, &tel);  /* 写队列 */
+            }
+        }
+
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(CYCLE_TIME));
     }
 }
@@ -221,7 +238,7 @@ void nrf24l01_task(void *pvParameters)
         /* 提前保存关机标志：App_process_flight_state 会清零，必须在调用之前读取 */
         Remote_Data rd;
         uint8_t shutdown_req = 0;
-        if (xQueuePeek(remote_data_queue, &rd, 0) == pdTRUE)
+        if (xQueuePeek(remote_data_queue, &rd, 0) == pdTRUE)  /* 读队列 */
             shutdown_req = rd.shutdown;
 
         /* ---- 处理遥控器连接状态 ---- */
@@ -255,12 +272,12 @@ void nrf24l01_task(void *pvParameters)
 //            if (++blue_tick >= 17)   /* 17 × 6ms ≈ 102ms */
 //            {
 //                blue_tick = 0;
-                  /*江协蓝牙串口*/
+//                  /*江协蓝牙串口*/
 //                BlueSerial_Printf("[plot,%d,%d,%d]",
 //                                  g_flow_height_mm,
 //                                  (int)g_flow_data.vx,
 //                                  (int)g_flow_data.vy);
-				          /*vofa+蓝牙*/
+//				          /*vofa+蓝牙*/
 //							  BlueSerial_Printf(":%d,%d,%d\n",
 //                                  g_flow_height_mm,
 //                                  (int)g_flow_data.vx,
@@ -321,7 +338,7 @@ void power_mgmt_task(void *pvParameters)
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
             vTaskDelay(pdMS_TO_TICKS(100));
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
-					  vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(9000));
+					  vTaskDelayUntil(&last_wake, POWER_TASK_PERIOD);
         }
     }
 }

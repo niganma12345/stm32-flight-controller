@@ -55,7 +55,7 @@ void App_OLED_Task(void *pvParameters)
         OLED_Clear();
 
         /* 消费队列中所有待显示命令（非阻塞，队列为空则画空白屏） */
-        while (xQueueReceive(g_queue, &cmd, 0) == pdTRUE)
+        while (xQueueReceive(g_queue, &cmd, 0) == pdTRUE)  /* 读 */
         {
             OLED_ShowString(cmd.X, cmd.Y, cmd.Text, cmd.FontSize);
         }
@@ -90,7 +90,7 @@ void App_OLED_Post(int16_t X, int16_t Y, uint8_t FontSize, const char *Text)
     cmd.FontSize = FontSize;
     strncpy(cmd.Text, Text, sizeof(cmd.Text) - 1);
     cmd.Text[sizeof(cmd.Text) - 1] = '\0';
-    xQueueSend(g_queue, &cmd, 0);  /* 队列满则丢弃 */
+    xQueueSend(g_queue, &cmd, 0);  /* 写队列，队列满则丢弃 */
 }
 
 /**

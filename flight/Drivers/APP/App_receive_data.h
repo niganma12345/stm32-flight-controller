@@ -5,10 +5,15 @@
 #include "Com_config.h"
 
 
-// 帧头校验值
+// 帧头校验值（接收方向：遥控→飞控）
 #define FRAME_HEAD_CHECK_1 'n'
 #define FRAME_HEAD_CHECK_2 'g'
 #define FRAME_HEAD_CHECK_3 'm'
+
+// 帧头（发送方向：飞控→遥控 遥测回传）
+#define FRAME_HEAD_TELE_1 'a'
+#define FRAME_HEAD_TELE_2 'l'
+#define FRAME_HEAD_TELE_3 't'
 
 // 最大重试次数（6ms周期，100次 = 600ms防抖动）
 #define MAX_RETRY_TIMES 100
@@ -45,11 +50,20 @@ void App_process_connect_state(uint8_t res);
 void App_process_flight_state(void);
 
 /**
- * @brief 读取 BMP280 高度和电池电压，打包并通过 NRF24L01 回传给遥控端
- *
- *        数据包格式: 'a' 'l' 't' + int16高度(cm) + flight_state + int16电压(0.1V) + 填充 → 17字节
- *        调用前需确保 BMP280 已初始化且收到遥控数据。
+ * @brief 遥测数据结构（flight_task 打包 → 队列 → nrf24l01_task 发送）
  */
-void App_send_telemetry(void);
+typedef struct
+{
+    float   altitude;     /* 融合高度 (m) */
+    uint8_t flight_state; /* 飞行状态 */
+    uint8_t flow_x;       /* 光流前后有移动 */
+    uint8_t flow_y;       /* 光流左右有移动 */
+} Telemetry_t;
+
+/**
+ * @brief 遥测回传：读队列 + 电池电压 → 打包发送
+ * @return uint8_t 0:发送成功  1:无数据/失败
+ */
+uint8_t App_send_telemetry(void);
 
 #endif // __APP_RECEIVE_DATA__
