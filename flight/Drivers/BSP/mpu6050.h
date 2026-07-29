@@ -123,9 +123,9 @@ void Int_MPU6050_Get_Data(Gyro_Accel_Struct *data);
  * 例：水平面读到 X=120, Y=-80, Z=16500
  *     则 ACCEL_OFFSET_X=120, ACCEL_OFFSET_Y=-80, ACCEL_OFFSET_Z=16500-16384=116
  */
-#define ACCEL_OFFSET_X  0   /* 水平面 X 轴原始 ADC 平均值 */
-#define ACCEL_OFFSET_Y  0   /* 水平面 Y 轴原始 ADC 平均值 */
-#define ACCEL_OFFSET_Z  0   /* 水平面 Z 轴原始 ADC 平均值 - 16384 */
+#define ACCEL_OFFSET_X  -200   /* 水平面 X 轴原始 ADC 平均值 */
+#define ACCEL_OFFSET_Y  162   /* 水平面 Y 轴原始 ADC 平均值 */
+#define ACCEL_OFFSET_Z  496   /* 水平面 Z 轴原始 ADC 平均值 - 16384 */
 
 /* 采集模式：偏移全为 0 时 Init 自动采样到以下变量（供 OLED 显示） */
 extern int32_t g_accel_raw_x;

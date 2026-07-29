@@ -68,7 +68,7 @@ PID_Struct gyro_x_pid = {
 PID_Struct yaw_pid = {
     .kp = -1.00f,      
     .ki = -0.02f,
-    .kd = -0.4f,
+    .kd = -0.2f,
     .integral_max = 30.0f,   
     .output_max   = 100.0f,  
 };
