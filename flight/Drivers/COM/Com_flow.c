@@ -39,6 +39,14 @@ static void RemoveRotation(Flow_Data_t *pFlow,
     int16_t rot_pix = (int16_t)(gx * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
     int16_t rot_piy = (int16_t)(gy * dt_s / FLOW_DEG_PER_PIXEL + 0.5f);
 
+    /* 旋转补偿量不能超过原始位移 */
+    int16_t max_dx = (pFlow->disp.delta_x > 0) ? pFlow->disp.delta_x : -pFlow->disp.delta_x;
+    int16_t max_dy = (pFlow->disp.delta_y > 0) ? pFlow->disp.delta_y : -pFlow->disp.delta_y;
+    if (rot_piy >  max_dx) rot_piy =  max_dx;
+    if (rot_piy < -max_dx) rot_piy = -max_dx;
+    if (rot_pix >  max_dy) rot_pix =  max_dy;
+    if (rot_pix < -max_dy) rot_pix = -max_dy;
+
     int16_t new_dx = pFlow->disp.delta_x + rot_piy;
     int16_t new_dy = pFlow->disp.delta_y + rot_pix;
 
