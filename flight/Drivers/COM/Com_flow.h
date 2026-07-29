@@ -26,8 +26,8 @@
 /* 速度滤波与死区 */
 #define FLOW_VEL_LPF_ALPHA     0.1f
 #define FLOW_PIXEL_DEADBAND    2
-#define FLOW_POS_DEADBAND_MM   30.0f
-#define FLOW_VEL_DEADBAND      30.0f
+#define FLOW_POS_DEADBAND_MM   100.0f
+#define FLOW_VEL_DEADBAND      100.0f
 
 /* 光流修正量低通 */
 #define FLOW_CORR_LPF_ALPHA    0.01f

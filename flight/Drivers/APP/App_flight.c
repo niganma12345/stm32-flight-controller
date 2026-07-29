@@ -66,11 +66,11 @@ PID_Struct gyro_x_pid = {
 
 // 偏航PID结构体
 PID_Struct yaw_pid = {
-    .kp = 2.00f,      
-    .ki = 0.0f,
-    .kd = 0.00f,
-    .integral_max = 30.0f,   /* 直接混控，积分上限适度放宽 */
-    .output_max   = 100.0f,  /* 直接混控，与 Com_limit(100,-100) 一致 */
+    .kp = -1.00f,      
+    .ki = -0.02f,
+    .kd = -0.4f,
+    .integral_max = 30.0f,   
+    .output_max   = 100.0f,  
 };
 
 /*============================================================================*/
