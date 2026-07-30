@@ -15,7 +15,7 @@
 #define FLOW_SCALE_FACTOR   0.021f
 
 /* 旋转补偿：每像素对应张角 (°) */
-#define FLOW_DEG_PER_PIXEL  0.009f
+#define FLOW_DEG_PER_PIXEL  0.05f
 
 /* 表面质量最低阈值 */
 #define FLOW_SQUAL_MIN      70
