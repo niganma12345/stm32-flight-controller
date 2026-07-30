@@ -43,6 +43,14 @@ RTE/
 *.swo
 *~
 
+# 文档/记录
+*.pdf
+记录.txt
+
+# 编译日志
+*_uv4build.log
+build*.log
+
 # OS
 Thumbs.db
 Desktop.ini
